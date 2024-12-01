@@ -40,6 +40,13 @@ inline void idle_no_sleep() { idle(true); }
 
 void kill(FSTR_P const lcd_error=nullptr, FSTR_P const lcd_component=nullptr, const bool steppers_off=false);
 void minkill(const bool steppers_off=false);
+#if ENABLED(POWER_OFF_WAIT_FOR_COOLDOWN)
+  void powerOffOnCooldown();
+#endif
+
+#if ENABLED(CREATBOT_LINUX_LCD)
+  void LCDCtrlShutdown();
+#endif
 
 // Global State of the firmware
 enum MarlinState : uint8_t {

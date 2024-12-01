@@ -21,7 +21,11 @@
  */
 #pragma once
 
+#ifdef SERVO_SPEED_SLOWLY
+#include "Slow_Servo.h"
+#else
 #include <Servo.h>
+#endif
 
 #include "../../core/millis_t.h"
 
@@ -47,6 +51,8 @@ class libServo {
 
     int servo_pin = 0;
     millis_t delay = 0;
+    int min_pulse = MIN_PULSE_WIDTH;
+    int max_pulse = MAX_PULSE_WIDTH;
 
     bool was_attached_before_pause;
     int value_before_pause;

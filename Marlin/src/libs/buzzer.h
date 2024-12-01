@@ -111,6 +111,15 @@
        *          playing the tones in the queue.
        */
       static void tick();
+
+      /**
+       * @brief 等待声音都完成
+       * @details 等待缓存的声音都播放结束, 或者到达设置的超时时间
+       *          类似于flush
+       * 
+       * @param timeout 等待的超时时间
+       */
+      static void waitDone(const uint16_t timeout);
   };
 
   // Provide a buzzer instance
@@ -118,16 +127,19 @@
 
   // Buzz directly via the BEEPER pin tone queue
   #define BUZZ(V...) buzzer.tone(V)
+  #define BUZZDONE(t) buzzer.waitDone(t)
 
 #elif USE_MARLINUI_BUZZER
 
   // Use MarlinUI for a buzzer on the LCD
   #define BUZZ(V...) ui.buzz(V)
+  #define BUZZDONE(t) safe_delay(t)
 
 #else
 
   // No buzz capability
   #define BUZZ(...) NOOP
+  #define BUZZDONE(t) NOOP
 
 #endif
 

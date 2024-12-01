@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+#
+# Build tests for CreatBot_F446
+#
+
+# exit on first failure
+set -e
+
+# Build examples
+restore_configs
+
+use_creatbot_configs "CreatBot/F430"
+exec_test $1 $2 "CreatBot F430" "$3"
+
+use_creatbot_configs "CreatBot/D600 Pro"
+exec_test $1 $2 "CreatBot D600 Pro" "$3"
+
+use_creatbot_configs "CreatBot/D600 Pro2"
+exec_test $1 $2 "CreatBot D600 Pro2" "$3"
+
+use_creatbot_configs "CreatBot/D1000"
+exec_test $1 $2 "CreatBot D1000" "$3"
+
+use_creatbot_configs "CreatBot/F430 NX"
+exec_test $1 $2 "CreatBot F430 NX" "$3"
+
+use_creatbot_configs "CreatBot/PEEK-300"
+exec_test $1 $2 "CreatBot PEEK-300" "$3"
+
+use_creatbot_configs "CreatBot/PEEK-250"
+exec_test $1 $2 "CreatBot PEEK-250" "$3"
+
+use_creatbot_configs "CreatBot/F200"
+exec_test $1 $2 "CreatBot F200" "$3"
+
+# cleanup
+restore_configs

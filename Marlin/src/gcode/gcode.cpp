@@ -35,6 +35,7 @@ GcodeSuite gcode;
 #include "parser.h"
 #include "queue.h"
 #include "../module/motion.h"
+#include "../module/planner.h"
 
 #if ENABLED(PRINTCOUNTER)
   #include "../module/printcounter.h"
@@ -324,6 +325,8 @@ void GcodeSuite::dwell(millis_t time) {
  * Process the parsed command and dispatch it to its handler
  */
 void GcodeSuite::process_parsed_command(const bool no_ok/*=false*/) {
+  if (planner.cleaning_buffer_counter) return;
+
   TERN_(HAS_FANCHECK, fan_check.check_deferred_error());
 
   KEEPALIVE_STATE(IN_HANDLER);
@@ -623,7 +626,7 @@ void GcodeSuite::process_parsed_command(const bool no_ok/*=false*/) {
       #endif
 
       #if HAS_HEATED_CHAMBER
-        case 141: M141(); break;                                  // M141: Set chamber temperature
+        case 141: case 6013: M141(); break;                       // M141: Set chamber temperature // Support M6013
         case 191: M191(); break;                                  // M191: Wait for chamber temperature to reach target
       #endif
 
@@ -1073,12 +1076,14 @@ void GcodeSuite::process_parsed_command(const bool no_ok/*=false*/) {
 
       case 999: M999(); break;                                    // M999: Restart after being Stopped
 
+      case 9999: M9999();break;                                   // M9999: Reboot into DFU mode
+
       #if ENABLED(POWER_LOSS_RECOVERY)
         case 413: M413(); break;                                  // M413: Enable/disable/query Power-Loss Recovery
         case 1000: M1000(); break;                                // M1000: [INTERNAL] Resume from power-loss
       #endif
 
-      #if HAS_MEDIA
+      #if EITHER(HAS_MEDIA, CANFILE) 
         case 1001: M1001(); break;                                // M1001: [INTERNAL] Handle SD completion
       #endif
 
@@ -1088,6 +1093,10 @@ void GcodeSuite::process_parsed_command(const bool no_ok/*=false*/) {
 
       #if ENABLED(UBL_MESH_WIZARD)
         case 1004: M1004(); break;                                // M1004: UBL Mesh Wizard
+      #endif
+
+      #if ENABLED(ANNEALING_SUPPORT)
+        case 1010: M1010(); break;                                // M1010: Enable/disable/query Annealing
       #endif
 
       #if ENABLED(MAX7219_GCODE)

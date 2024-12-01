@@ -58,6 +58,7 @@ class Power {
 
     #if ENABLED(AUTO_POWER_CONTROL)
       static void check(const bool pause);
+      static millis_t getAliveTime();
 
       private:
         static millis_t lastPowerOn;

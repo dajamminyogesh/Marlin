@@ -55,6 +55,8 @@ void GcodeSuite::M0_M1() {
 
   planner.synchronize();
 
+  TERN_(HAS_RESUME_CONTINUE, wait_for_user = true);
+
   #if HAS_MARLINUI_MENU
 
     if (parser.string_arg)

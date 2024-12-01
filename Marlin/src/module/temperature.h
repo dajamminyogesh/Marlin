@@ -202,10 +202,12 @@ typedef struct { float p, i, d, c, f; } raw_pidcf_t;
         const float pid_error = target - current;
         if (!target || pid_error < -(PID_FUNCTIONAL_RANGE)) {
           pid_reset = true;
+          temp_dState = current;
           return 0;
         }
         else if (pid_error > PID_FUNCTIONAL_RANGE) {
           pid_reset = true;
+          temp_dState = current;
           return MAX_POW;
         }
 
@@ -480,6 +482,13 @@ struct HeaterWatch {
   inline bool elapsed() { return elapsed(millis()); }
 
   inline bool check(const celsius_t curr) { return curr >= target; }
+
+  inline void check(const celsius_t curr, const celsius_t tgt) {
+    if (!next_ms) return;
+    if (!tgt || (curr > tgt - HYSTERESIS)) {
+      next_ms = 0;
+    }
+  }
 
   inline void restart(const celsius_t curr, const celsius_t tgt) {
     if (tgt) {
@@ -851,6 +860,10 @@ class Temperature {
 
       static void set_fan_speed(const uint8_t fan, const uint16_t speed);
 
+      #if ENABLED(ADJUST_EXTRUDER_AUTO_FAN)
+        static uint8_t extruder_auto_fan_speed;
+      #endif
+
       #if ENABLED(REPORT_FAN_CHANGE)
         static void report_fan_speed(const uint8_t fan);
       #endif
@@ -1122,7 +1135,9 @@ class Temperature {
      * Cooldown, as from the LCD. Disables all heaters and fans.
      */
     static void cooldown() {
-      zero_fan_speeds();
+      #if DISABLED(UNIQUE_LOGIC_PEEK250)
+        zero_fan_speeds();
+      #endif
       disable_all_heaters();
     }
 

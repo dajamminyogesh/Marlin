@@ -38,11 +38,19 @@ hal_servo_t servo[NUM_SERVOS];
 
 void servo_init() {
   #if HAS_SERVO_0
-    servo[0].attach(SERVO0_PIN);
-    servo[0].detach(); // Just set up the pin. We don't have a position yet. Don't move to a random position.
+    #if ENABLED(SERVO0_PULSE_CUSTOM)
+      servo[0].attach(SERVO0_PIN, SERVO0_MIN_PULSE, SERVO0_MAX_PULSE);
+    #else
+      servo[0].attach(SERVO0_PIN);
+    #endif
+  servo[0].detach();  // Just set up the pin. We don't have a position yet. Don't move to a random position.
   #endif
   #if HAS_SERVO_1
-    servo[1].attach(SERVO1_PIN);
+    #if ENABLED(SERVO1_PULSE_CUSTOM)
+      servo[1].attach(SERVO1_PIN, SERVO1_MIN_PULSE, SERVO1_MAX_PULSE);
+    #else
+      servo[1].attach(SERVO1_PIN);
+    #endif
     servo[1].detach();
   #endif
   #if HAS_SERVO_2

@@ -43,6 +43,16 @@
   #include "../../../feature/mixing.h"
 #endif
 
+static void move_z_by(const_float_t zdist) {
+  if (zdist) {
+    destination = current_position;
+    destination.z += zdist;
+    soft_endstop._enabled = false;
+    prepare_internal_move_to_destination(NOZZLE_PARK_Z_FEEDRATE);
+    soft_endstop._enabled = true;
+  }
+};
+
 /**
  * M701: Load filament
  *
@@ -55,6 +65,7 @@
  */
 void GcodeSuite::M701() {
   xyz_pos_t park_point = NOZZLE_PARK_POINT;
+  float pre_point_z = current_position.z;
 
   // Don't raise Z if the machine isn't homed
   if (TERN0(NO_MOTION_BEFORE_HOMING, axes_should_home())) park_point.z = 0;
@@ -88,14 +99,6 @@ void GcodeSuite::M701() {
       tool_change(target_extruder);
   #endif
 
-  auto move_z_by = [](const_float_t zdist) {
-    if (zdist) {
-      destination = current_position;
-      destination.z += zdist;
-      prepare_internal_move_to_destination(NOZZLE_PARK_Z_FEEDRATE);
-    }
-  };
-
   // Raise the Z axis (with max limit)
   const float park_raise = _MIN(park_point.z, (Z_MAX_POS) - current_position.z);
   move_z_by(park_raise);
@@ -119,7 +122,8 @@ void GcodeSuite::M701() {
   #endif
 
   // Restore Z axis
-  move_z_by(-park_raise);
+  const float park_restore = _MAX(pre_point_z - current_position.z, 0 - current_position.z);
+  move_z_by(park_restore);
 
   #if HAS_MULTI_EXTRUDER && (HAS_PRUSA_MMU1 || !HAS_MMU)
     // Restore toolhead if it was changed
@@ -146,6 +150,7 @@ void GcodeSuite::M701() {
  */
 void GcodeSuite::M702() {
   xyz_pos_t park_point = NOZZLE_PARK_POINT;
+  float pre_point_z = current_position.z;
 
   // Don't raise Z if the machine isn't homed
   if (TERN0(NO_MOTION_BEFORE_HOMING, axes_should_home())) park_point.z = 0;
@@ -192,8 +197,8 @@ void GcodeSuite::M702() {
   #endif
 
   // Lift Z axis
-  if (park_point.z > 0)
-    do_blocking_move_to_z(_MIN(current_position.z + park_point.z, Z_MAX_POS), feedRate_t(NOZZLE_PARK_Z_FEEDRATE));
+  const float park_raise = _MIN(park_point.z, (Z_MAX_POS) - current_position.z);
+  move_z_by(park_raise);
 
   // Unload filament
   #if HAS_PRUSA_MMU2
@@ -222,8 +227,8 @@ void GcodeSuite::M702() {
   #endif
 
   // Restore Z axis
-  if (park_point.z > 0)
-    do_blocking_move_to_z(_MAX(current_position.z - park_point.z, 0), feedRate_t(NOZZLE_PARK_Z_FEEDRATE));
+  const float park_restore = _MAX(pre_point_z - current_position.z, 0 - current_position.z);
+  move_z_by(park_restore);
 
   #if HAS_MULTI_EXTRUDER && (HAS_PRUSA_MMU1 || !HAS_MMU)
     // Restore toolhead if it was changed

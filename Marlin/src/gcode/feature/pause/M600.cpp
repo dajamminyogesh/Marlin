@@ -139,6 +139,8 @@ void GcodeSuite::M600() {
     park_point += hotend_offset[active_extruder];
   #endif
 
+  apply_motion_limits(park_point);
+
   // Unload filament
   // For MMU2, when enabled, reset retract value so it doesn't mess with MMU filament handling
   const float unload_length = standardM600 ? -ABS(parser.axisunitsval('U', E_AXIS, fc_settings[active_extruder].unload_length)) : 0.5f;

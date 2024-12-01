@@ -44,7 +44,7 @@
 #include "../../core/serial.h"
 #include "../../module/temperature.h"
 
-#if DISABLED(USE_OTG_USB_HOST) && !PINS_EXIST(USB_CS, USB_INTR)
+#if DISABLED(USE_OTG_USB_HOST) && DISABLED(USE_CH376) && !PINS_EXIST(USB_CS, USB_INTR)
   #error "USB_FLASH_DRIVE_SUPPORT requires USB_CS_PIN and USB_INTR_PIN to be defined."
 #endif
 
@@ -93,6 +93,13 @@
   #define rREVISION 0
   #define UHS_STATE(state) USB_STATE_##state
 
+#elif ENABLED(USE_CH376)
+
+  #include "lib-ch376/usb_host.h"
+  #define UHS_START usb.start()
+  #define rREVISION 0
+  #define UHS_STATE(state) USB_STATE_##state
+  
 #else
 
   #include "lib-uhs2/Usb.h"

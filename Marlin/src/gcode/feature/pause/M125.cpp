@@ -88,9 +88,11 @@ void GcodeSuite::M125() {
     park_point += hotend_offset[active_extruder];
   #endif
 
+  apply_motion_limits(park_point);
+
   const bool sd_printing = TERN0(HAS_MEDIA, IS_SD_PRINTING());
 
-  ui.pause_show_message(PAUSE_MESSAGE_PARKING, PAUSE_MODE_PAUSE_PRINT);
+  ui.pause_show_message(PAUSE_MESSAGE_SYNCING, PAUSE_MODE_PAUSE_PRINT);
 
   // If possible, show an LCD prompt with the 'P' flag
   const bool show_lcd = TERN0(HAS_MARLINUI_MENU, parser.boolval('P'));

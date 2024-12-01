@@ -182,6 +182,10 @@
   #include "../feature/leds/printer_event_leds.h"
 #endif
 
+#if ENABLED(PRINTER_STATUS_LEDS)
+  #include "../feature/leds/printer_status_leds.h"
+#endif
+
 #if ENABLED(JOYSTICK)
   #include "../feature/joystick.h"
 #endif
@@ -386,6 +390,10 @@ PGMSTR(str_t_heating_failed, STR_T_HEATING_FAILED);
 #if HAS_FAN
 
   uint8_t Temperature::fan_speed[FAN_COUNT] = ARRAY_N_1(FAN_COUNT, FAN_OFF_PWM);
+
+  #if ENABLED(ADJUST_EXTRUDER_AUTO_FAN)
+    uint8_t Temperature::extruder_auto_fan_speed = EXTRUDER_AUTO_FAN_SPEED;
+  #endif
 
   #if ENABLED(EXTRA_FAN_SPEED)
 
@@ -1211,7 +1219,7 @@ int16_t Temperature::getHeaterPower(const heater_id_t heater_id) {
       if (PWM_PIN(P##_AUTO_FAN_PIN) && A < 255)           \
         hal.set_pwm_duty(pin_t(P##_AUTO_FAN_PIN), D ? A : 0); \
       else                                                \
-        WRITE(P##_AUTO_FAN_PIN, D);                       \
+        OUT_WRITE(P##_AUTO_FAN_PIN, D);                   \
     }while(0)
 
     uint8_t fanDone = 0;
@@ -1239,6 +1247,8 @@ int16_t Temperature::getHeaterPower(const heater_id_t heater_id) {
 
       #if ALL(HAS_FANCHECK, HAS_PWMFANCHECK)
         #define _AUTOFAN_SPEED() fan_check.is_measuring() ? 255 : EXTRUDER_AUTO_FAN_SPEED
+      #elif ENABLED(ADJUST_EXTRUDER_AUTO_FAN)
+        #define _AUTOFAN_SPEED() extruder_auto_fan_speed
       #else
         #define _AUTOFAN_SPEED() EXTRUDER_AUTO_FAN_SPEED
       #endif
@@ -1299,6 +1309,8 @@ void Temperature::_temp_error(const heater_id_t heater_id, FSTR_P const serial_m
 
   static uint8_t killed = 0;
 
+  TERN_(PRINTER_STATUS_LEDS, printerStatusLEDs.update(true));
+
   if (IsRunning() && TERN1(BOGUS_TEMPERATURE_GRACE_PERIOD, killed == 2)) {
     SERIAL_ERROR_START();
     SERIAL_ECHOF(serial_msg);
@@ -1349,6 +1361,8 @@ void Temperature::_temp_error(const heater_id_t heater_id, FSTR_P const serial_m
   #else
     if (!killed) { killed = 1; loud_kill(lcd_msg, heater_id); }
   #endif
+
+  TERN_(PRINTER_STATUS_LEDS, printerStatusLEDs.update());
 }
 
 void Temperature::maxtemp_error(const heater_id_t heater_id) {
@@ -1583,6 +1597,8 @@ void Temperature::mintemp_error(const heater_id_t heater_id) {
             TERN_(HAS_DWIN_E3V2_BASIC, DWIN_Popup_Temperature(0));
             _temp_error((heater_id_t)e, FPSTR(str_t_heating_failed), GET_TEXT_F(MSG_HEATING_FAILED_LCD));
           }
+        } else{
+          watch_hotend[e].check(degHotend(e), degTargetHotend(e));
         }
       #endif
 
@@ -1608,6 +1624,8 @@ void Temperature::mintemp_error(const heater_id_t heater_id) {
           TERN_(HAS_DWIN_E3V2_BASIC, DWIN_Popup_Temperature(0));
           _temp_error(H_BED, FPSTR(str_t_heating_failed), GET_TEXT_F(MSG_HEATING_FAILED_LCD));
         }
+      } else {
+        watch_bed.check(degBed(), degTargetBed());
       }
     #endif // WATCH_BED
 
@@ -1691,6 +1709,8 @@ void Temperature::mintemp_error(const heater_id_t heater_id) {
           start_watching_chamber();             // If temp reached, turn off elapsed check.
         else
           _temp_error(H_CHAMBER, FPSTR(str_t_heating_failed), GET_TEXT_F(MSG_HEATING_FAILED_LCD));
+      } else {
+        watch_chamber.check(degChamber(), degTargetChamber());
       }
     #endif
 
@@ -3486,6 +3506,14 @@ HAL_TEMP_TIMER_ISR() {
   #define MIN_STATE_TIME 16 // MIN_STATE_TIME * 65.5 = time in milliseconds
 #endif
 
+#if ENABLED(SLOW_PID_BED)
+  #define MIN_STATE_TIME_BED 12
+#endif
+
+#if ENABLED(SLOW_PID_CHAMBER)
+  #define MIN_STATE_TIME_CHAMBER 16
+#endif
+
 class SoftPWM {
 public:
   uint8_t count;
@@ -3506,6 +3534,32 @@ public:
     }
   #endif
 };
+
+#if ANY(SLOW_PID_BED, SLOW_PID_CHAMBER)
+
+template<uint8_t min_state_time>
+class SoftPWM_Slow {
+   public:
+    uint8_t     count;
+    inline bool add(const uint8_t mask, const uint8_t amount) {
+      count = (count & mask) + amount; return (count > mask);
+    }
+
+    bool        state_heater;
+    uint8_t     state_timer_heater;
+    inline void dec() {
+      if (state_timer_heater > 0) state_timer_heater--;
+    }
+    inline bool ready(const bool v) {
+      const bool rdy = !state_timer_heater;
+      if (rdy && state_heater != v) {
+        state_heater       = v;
+        state_timer_heater = min_state_time;
+      }
+      return rdy;
+    }
+};
+#endif
 
 /**
  * Handle various ~1kHz tasks associated with temperature
@@ -3548,11 +3602,19 @@ void Temperature::isr() {
   #endif
 
   #if HAS_HEATED_BED
-    static SoftPWM soft_pwm_bed;
+    #if ENABLED(SLOW_PID_BED)
+      static SoftPWM_Slow<MIN_STATE_TIME_BED> soft_pwm_bed;
+    #else
+      static SoftPWM soft_pwm_bed;
+    #endif
   #endif
 
   #if HAS_HEATED_CHAMBER
-    static SoftPWM soft_pwm_chamber;
+    #if ENABLED(SLOW_PID_CHAMBER)
+      static SoftPWM_Slow<MIN_STATE_TIME_CHAMBER> soft_pwm_chamber;
+    #else
+      static SoftPWM soft_pwm_chamber;
+    #endif
   #endif
 
   #if HAS_COOLER
@@ -3575,6 +3637,33 @@ void Temperature::isr() {
       }while(0)
     #endif
 
+    #if ANY(SLOW_PID_BED, SLOW_PID_CHAMBER)
+      #define _SLOW_SET(NR,PWM,V) do{ if (PWM.ready(V)) WRITE_HEATER_##NR(V); }while(0)
+      #define _SLOW_PWM(NR,PWM,SRC) do{ PWM.count = SRC.soft_pwm_amount; _SLOW_SET(NR,PWM,(PWM.count > 0)); }while(0)
+      #define _PWM_OFF(NR,PWM) do{ if (PWM.count < slow_pwm_count) _SLOW_SET(NR,PWM,0); }while(0)
+      
+      static uint8_t slow_pwm_count = 0;
+      static uint8_t pwm_count_slowpid = 0;
+    #endif
+
+    #if HAS_HEATED_BED
+      #if ENABLED(SLOW_PID_BED)
+        if (slow_pwm_count == 0) {
+          _SLOW_PWM(BED, soft_pwm_bed, temp_bed);
+        }
+        _PWM_OFF(BED, soft_pwm_bed);
+      #endif
+    #endif
+
+    #if HAS_HEATED_CHAMBER
+      #if ENABLED(SLOW_PID_CHAMBER)
+        if (slow_pwm_count == 0) {
+          _SLOW_PWM(CHAMBER, soft_pwm_chamber, temp_chamber);
+        }
+        _PWM_OFF(CHAMBER, soft_pwm_chamber);
+      #endif
+    #endif
+
     /**
      * Standard heater PWM modulation
      */
@@ -3587,11 +3676,15 @@ void Temperature::isr() {
       #endif
 
       #if HAS_HEATED_BED
-        _PWM_MOD(BED, soft_pwm_bed, temp_bed);
+        #if DISABLED(SLOW_PID_BED)
+          _PWM_MOD(BED, soft_pwm_bed, temp_bed);
+        #endif
       #endif
 
       #if HAS_HEATED_CHAMBER
-        _PWM_MOD(CHAMBER, soft_pwm_chamber, temp_chamber);
+        #if DISABLED(SLOW_PID_CHAMBER)
+          _PWM_MOD(CHAMBER, soft_pwm_chamber, temp_chamber);
+        #endif
       #endif
 
       #if HAS_COOLER
@@ -3644,11 +3737,15 @@ void Temperature::isr() {
       #endif
 
       #if HAS_HEATED_BED
-        _PWM_LOW(BED, soft_pwm_bed);
+        #if DISABLED(SLOW_PID_BED)
+          _PWM_LOW(BED, soft_pwm_bed);
+        #endif
       #endif
 
       #if HAS_HEATED_CHAMBER
-        _PWM_LOW(CHAMBER, soft_pwm_chamber);
+        #if DISABLED(SLOW_PID_CHAMBER)
+          _PWM_LOW(CHAMBER, soft_pwm_chamber);
+        #endif
       #endif
 
       #if HAS_COOLER
@@ -3695,6 +3792,23 @@ void Temperature::isr() {
     // 4:                /  8 = 122.0703 Hz
     // 5:                /  4 = 244.1406 Hz
     pwm_count = pwm_count_tmp + _BV(SOFT_PWM_SCALE);
+
+    #if ANY(SLOW_PID_BED, SLOW_PID_CHAMBER)
+      // Increment slow_pwm_count only every 64th pwm_count_slowpid,
+      // i.e., yielding a PWM frequency of 16/128 Hz (8s).
+      if ((++pwm_count_slowpid & 0x3F) == 0) {
+        slow_pwm_count++;
+        slow_pwm_count &= 0x7F;
+
+        #if ENABLED(SLOW_PID_BED)
+          TERN_(HAS_HEATED_BED, soft_pwm_bed.dec());
+        #endif
+
+        #if ENABLED(SLOW_PID_CHAMBER)
+          TERN_(HAS_HEATED_CHAMBER, soft_pwm_chamber.dec());
+        #endif
+      }
+    #endif
 
   #else // SLOW_PWM_HEATERS
 
@@ -4266,7 +4380,7 @@ void Temperature::isr() {
           if (!residency_start_ms) {
             // Start the TEMP_RESIDENCY_TIME timer when we reach target temp for the first time.
             if (temp_diff < TEMP_WINDOW)
-              residency_start_ms = now + (first_loop ? SEC_TO_MS(TEMP_RESIDENCY_TIME) / 3 : 0);
+              residency_start_ms = now - (first_loop ? SEC_TO_MS(TEMP_RESIDENCY_TIME) / 3 : 0);
           }
           else if (temp_diff > TEMP_HYSTERESIS) {
             // Restart the timer whenever the temperature falls outside the hysteresis.
@@ -4403,7 +4517,7 @@ void Temperature::isr() {
           if (!residency_start_ms) {
             // Start the TEMP_BED_RESIDENCY_TIME timer when we reach target temp for the first time.
             if (temp_diff < TEMP_BED_WINDOW)
-              residency_start_ms = now + (first_loop ? SEC_TO_MS(TEMP_BED_RESIDENCY_TIME) / 3 : 0);
+              residency_start_ms = now - (first_loop ? SEC_TO_MS(TEMP_BED_RESIDENCY_TIME) / 3 : 0);
           }
           else if (temp_diff > TEMP_BED_HYSTERESIS) {
             // Restart the timer whenever the temperature falls outside the hysteresis.
@@ -4593,7 +4707,7 @@ void Temperature::isr() {
           if (!residency_start_ms) {
             // Start the TEMP_CHAMBER_RESIDENCY_TIME timer when we reach target temp for the first time.
             if (temp_diff < TEMP_CHAMBER_WINDOW)
-              residency_start_ms = now + (first_loop ? SEC_TO_MS(TEMP_CHAMBER_RESIDENCY_TIME) / 3 : 0);
+              residency_start_ms = now - (first_loop ? SEC_TO_MS(TEMP_CHAMBER_RESIDENCY_TIME) / 3 : 0);
           }
           else if (temp_diff > TEMP_CHAMBER_HYSTERESIS) {
             // Restart the timer whenever the temperature falls outside the hysteresis.
@@ -4692,7 +4806,7 @@ void Temperature::isr() {
           if (!residency_start_ms) {
             // Start the TEMP_COOLER_RESIDENCY_TIME timer when we reach target temp for the first time.
             if (temp_diff < TEMP_COOLER_WINDOW)
-              residency_start_ms = now + (first_loop ? SEC_TO_MS(TEMP_COOLER_RESIDENCY_TIME) / 3 : 0);
+              residency_start_ms = now - (first_loop ? SEC_TO_MS(TEMP_COOLER_RESIDENCY_TIME) / 3 : 0);
           }
           else if (temp_diff > TEMP_COOLER_HYSTERESIS) {
             // Restart the timer whenever the temperature falls outside the hysteresis.

@@ -205,6 +205,8 @@
 #define STR_KILL_INACTIVE_TIME              "too much inactive time - current command: "
 #define STR_KILL_BUTTON                     "KILL button/pin"
 
+#define STR_UNREGISTERED                    "Machine unregistered, Register it First!"
+
 // temperature.cpp strings
 #define STR_PID_AUTOTUNE                    "PID Autotune"
 #define STR_PID_AUTOTUNE_START              " start"
@@ -299,6 +301,7 @@
 #define STR_AUTO_RETRACT_S                  "Auto-Retract (S<enable>)"
 #define STR_FILAMENT_LOAD_UNLOAD            "Filament load/unload"
 #define STR_POWER_LOSS_RECOVERY             "Power-loss recovery"
+#define STR_ANNEALING_SUPPORT               "Done Annealing" 
 #define STR_FILAMENT_RUNOUT_SENSOR          "Filament runout sensor"
 #define STR_DRIVER_STEPPING_MODE            "Driver stepping mode"
 #define STR_STEPPER_DRIVER_CURRENT          "Stepper driver current"

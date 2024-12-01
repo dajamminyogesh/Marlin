@@ -57,6 +57,7 @@
 #include "../../HAL/shared/Delay.h"
 #include "../../MarlinCore.h"
 #include "../../sd/cardreader.h"
+#include "../../canOpen/canFile/canFile.h"
 
 #if ENABLED(PRINTCOUNTER)
   #include "../../core/utility.h"
@@ -241,6 +242,18 @@ namespace ExtUI {
     #endif
   }
 
+  bool isAnyHeating(){
+    HOTEND_LOOP()
+      if (thermalManager.degTargetHotend(e) > 0) return true;
+    #if HAS_HEATED_BED
+      if (thermalManager.degTargetBed() > 0) return true;
+    #endif
+    #if HAS_TEMP_CHAMBER
+      if (thermalManager.degTargetChamber() > 0) return true;
+    #endif
+    return false;
+  }
+
   bool isHeaterIdle(const extruder_t extruder) {
     #if HAS_HOTEND && HEATER_IDLE_HANDLER
       return thermalManager.heater_idle[extruder - E0].timed_out;
@@ -334,7 +347,7 @@ namespace ExtUI {
     return epos;
   }
 
-  void setAxisPosition_mm(const_float_t position, const axis_t axis, const feedRate_t feedrate/*=0*/) {
+  void setAxisPosition_mm(const_float_t position, const axis_t axis, const feedRate_t feedrate/*=0*/, const bool move/*=true*/) {
     // Get motion limit from software endstops, if any
     float min, max;
     soft_endstop.get_manual_axis_limits((AxisEnum)axis, min, max);
@@ -349,14 +362,24 @@ namespace ExtUI {
     #endif
 
     current_position[axis] = constrain(position, min, max);
-    line_to_current_position(feedrate ?: manual_feedrate_mm_s[axis]);
+    if(move) line_to_current_position(feedrate ?: manual_feedrate_mm_s[axis]);
   }
 
-  void setAxisPosition_mm(const_float_t position, const extruder_t extruder, const feedRate_t feedrate/*=0*/) {
+  void setAxisPosition_mm(const_float_t position, const extruder_t extruder, const feedRate_t feedrate/*=0*/, const bool move/*=true*/) {
     setActiveTool(extruder, true);
 
     current_position.e = position;
-    line_to_current_position(feedrate ?: manual_feedrate_mm_s.e);
+    if(move) line_to_current_position(feedrate ?: manual_feedrate_mm_s.e);
+  }
+
+  void preOffsetAxisPosition_mm(const_float_t offsetPosition, const axis_t axis){
+    current_position[axis] += offsetPosition;
+    setAxisPosition_mm(current_position[axis], axis, 0, false);
+  }
+
+  void preOffsetAxisPosition_mm(const_float_t offsetPosition, const extruder_t extruder){
+    current_position.e += offsetPosition;
+    setAxisPosition_mm(current_position.e, extruder, 0, false);
   }
 
   //
@@ -365,8 +388,37 @@ namespace ExtUI {
   void setActiveTool(const extruder_t extruder, bool no_move) {
     #if HAS_MULTI_EXTRUDER
       const uint8_t e = extruder - E0;
+      xyz_pos_t park_point = NOZZLE_PARK_POINT;
+      float pre_point_z = current_position.z;
+
+      // 降低平台
+      #if ENABLED(TOOLCHANGE_ZRAISE_NO_PRINTING) && DISABLED(TOOLCHANGE_ZRAISE_BEFORE_RETRACT) && ENABLED(SWITCHING_NOZZLE)
+        if (!isPrinting() && (e != active_extruder)) {
+          if (TERN0(NO_MOTION_BEFORE_HOMING, axes_should_home())) park_point.z = 0;
+          const float park_raise = _MIN(park_point.z, (Z_MAX_POS) - current_position.z);
+          if (park_raise) {
+            destination = current_position;
+            destination.z += park_raise;
+            prepare_internal_move_to_destination(NOZZLE_PARK_Z_FEEDRATE);
+          }
+        }
+      #endif
+
+      // 切换挤出机
       if (e != active_extruder) tool_change(e, no_move);
       active_extruder = e;
+
+      // 升高平台
+      #if ENABLED(TOOLCHANGE_ZRAISE_NO_PRINTING) && DISABLED(TOOLCHANGE_ZRAISE_BEFORE_RETRACT) && ENABLED(SWITCHING_NOZZLE)
+        if (!isPrinting() && (e == active_extruder)) {
+          const float park_restore = _MAX(pre_point_z - current_position.z, 0 - current_position.z);
+          if (park_restore) {
+            destination = current_position;
+            destination.z += park_restore;
+            prepare_internal_move_to_destination(NOZZLE_PARK_Z_FEEDRATE);
+          }
+        }
+      #endif
     #else
       UNUSED(extruder);
       UNUSED(no_move);
@@ -724,6 +776,7 @@ namespace ExtUI {
     void setFilamentRunoutEnabled(const bool value) { runout.enabled = value; }
     bool getFilamentRunoutState()                   { return runout.filament_ran_out; }
     void setFilamentRunoutState(const bool value)   { runout.filament_ran_out = value; }
+    bool getFilamentInsertState()                   { return runout.filament_insert; }
 
     #if HAS_FILAMENT_RUNOUT_DISTANCE
       float getFilamentRunoutDistance_mm()                 { return runout.runout_distance(); }
@@ -879,6 +932,10 @@ namespace ExtUI {
       return steps * planner.mm_per_step[axis];
     }
 
+    float getBabyStepAxisTotal_mm(const axis_t axis) {
+      return mmFromWholeSteps(babystep.axis_total[BS_TOTAL_IND(axis)], axis);
+    }
+
   #endif // BABYSTEPPING
 
   float getZOffset_mm() {
@@ -895,8 +952,10 @@ namespace ExtUI {
 
   void setZOffset_mm(const_float_t value) {
     #if HAS_BED_PROBE
-      if (WITHIN(value, Z_PROBE_OFFSET_RANGE_MIN, Z_PROBE_OFFSET_RANGE_MAX))
+      if (WITHIN(value, Z_PROBE_OFFSET_RANGE_MIN, Z_PROBE_OFFSET_RANGE_MAX)) {
+        TERN_(BABYSTEPPING, babystep.add_mm(Z_AXIS, value - probe.offset.z));
         probe.offset.z = value;
+      }
     #elif ENABLED(BABYSTEP_DISPLAY_TOTAL)
       babystep.add_mm(Z_AXIS, value - getZOffset_mm());
     #else
@@ -1125,10 +1184,16 @@ namespace ExtUI {
   }
 
   bool isPrintingFromMediaPaused() {
-    return TERN0(HAS_MEDIA, IS_SD_PAUSED());
+    return TERN0(HAS_MEDIA, IS_SD_PAUSED()) ||   // MEDIA
+           TERN0(CANFILE, IS_CANFILE_PAUSED());  // CANFile
   }
 
-  bool isPrintingFromMedia() { return TERN0(HAS_MEDIA, IS_SD_PRINTING() || IS_SD_PAUSED()); }
+  bool isPrintingFromMedia() {
+    return TERN0(HAS_MEDIA, IS_SD_PRINTING() || IS_SD_PAUSED()) ||  // MEDIA
+           TERN0(CANFILE, IS_CANFILE_OPEN());                       // CANFile
+  }
+
+  bool isPrintingFromSerial() { return queue.get_current_line_number() != 0; }
 
   bool isPrinting() {
     return commandsInQueue() || isPrintingFromMedia() || printJobOngoing() || printingIsPaused();
@@ -1224,6 +1289,9 @@ void MarlinUI::update() { ExtUI::onIdle(); }
 
 void MarlinUI::kill_screen(FSTR_P const error, FSTR_P const component) {
   using namespace ExtUI;
+  #if ENABLED(CREATBOT_LINUX_LCD)
+    onPowerOffSafety();   //安全关机通知
+  #endif
   if (!flags.printer_killed) {
     flags.printer_killed = true;
     onPrinterKilled(error, component);

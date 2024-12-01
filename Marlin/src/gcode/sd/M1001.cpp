@@ -60,10 +60,27 @@
 #endif
 
 /**
+ * 打印完成提示音
+ */
+#if HAS_SOUND
+  inline void finishTone() {
+    uint8_t i = 5;
+    do {
+      BUZZ(300, 659);  // mi
+      BUZZ(200, 0);
+      BUZZ(300, 698);  // fa
+      BUZZ(200, 0);
+    } while (--i);
+  }
+#endif
+
+/**
  * M1001: Execute actions for SD print completion
  */
 void GcodeSuite::M1001() {
   planner.synchronize();
+
+  TERN_(HAS_SOUND, finishTone());
 
   // SD Printing is finished when the queue reaches M1001
   card.flag.sdprinting = card.flag.sdprintdone = false;
@@ -73,6 +90,9 @@ void GcodeSuite::M1001() {
 
   // Purge the recovery file...
   TERN_(POWER_LOSS_RECOVERY, recovery.purge());
+
+  TERN_(DUAL_X_CARRIAGE, reset_idex_mode());
+  TERN_(DUAL_X_CARRIAGE, process_subcommands_now(F("G28X")));
 
   // Report total print time
   const bool long_print = print_job_timer.duration() > 60;
@@ -110,6 +130,8 @@ void GcodeSuite::M1001() {
 
   // Re-select the last printed file in the UI
   TERN_(SD_REPRINT_LAST_SELECTED_FILE, ui.reselect_last_file());
+
+  TERN_(ANNEALING_SUPPORT, process_subcommands_now(F("M1010 K")));
 }
 
 #endif // HAS_MEDIA

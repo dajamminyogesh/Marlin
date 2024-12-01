@@ -844,13 +844,17 @@ void restore_feedrate_and_scaling() {
         if (new_tool_index != 0) {
           // T1 can move from X2_MIN_POS to X2_MAX_POS or X2 home position (whichever is larger)
           soft_endstop.min.x = X2_MIN_POS;
-          soft_endstop.max.x = dual_max_x;
+          soft_endstop.max.x = X2_MAX_POS;
         }
         else if (idex_is_duplicating()) {
           // In Duplication Mode, T0 can move as far left as X1_MIN_POS
           // but not so far to the right that T1 would move past the end
           soft_endstop.min.x = X1_MIN_POS;
-          soft_endstop.max.x = _MIN(X1_MAX_POS, dual_max_x - duplicate_extruder_x_offset);
+          if (idex_mirrored_mode) {
+            soft_endstop.max.x = _MIN(X1_MAX_POS, (X1_MAX_POS + X2_MAX_POS - X2_HOME_POS) / 2);
+          } else {
+            soft_endstop.max.x = _MIN(X1_MAX_POS, X2_MAX_POS - duplicate_extruder_x_offset);
+          }
         }
         else {
           // In other modes, T0 can move from X1_MIN_POS to X1_MAX_POS
@@ -941,7 +945,7 @@ void restore_feedrate_and_scaling() {
     #else
 
       #if HAS_X_AXIS
-        if (axis_was_homed(X_AXIS)) {
+        if (axis_was_homed(X_AXIS) || (target.x < 0)) {
           #if !HAS_SOFTWARE_ENDSTOPS || ENABLED(MIN_SOFTWARE_ENDSTOP_X)
             NOLESS(target.x, soft_endstop.min.x);
           #endif
@@ -952,7 +956,7 @@ void restore_feedrate_and_scaling() {
       #endif
 
       #if HAS_Y_AXIS
-        if (axis_was_homed(Y_AXIS)) {
+        if (axis_was_homed(Y_AXIS) || (target.y < 0)) {
           #if !HAS_SOFTWARE_ENDSTOPS || ENABLED(MIN_SOFTWARE_ENDSTOP_Y)
             NOLESS(target.y, soft_endstop.min.y);
           #endif
@@ -965,7 +969,7 @@ void restore_feedrate_and_scaling() {
     #endif
 
     #if HAS_Z_AXIS
-      if (axis_was_homed(Z_AXIS)) {
+      if (axis_was_homed(Z_AXIS) || (target.z < 0)) {
         #if !HAS_SOFTWARE_ENDSTOPS || ENABLED(MIN_SOFTWARE_ENDSTOP_Z)
           NOLESS(target.z, soft_endstop.min.z);
         #endif
@@ -1312,6 +1316,21 @@ FORCE_INLINE void segment_idle(millis_t &next_idle_ms) {
     if (park) raised_parked_position = current_position;  // Remember current raised toolhead position for use by unpark
   }
 
+  void reset_idex_mode() {
+    if (idex_is_duplicating()) {
+      set_axis_untrusted(X_AXIS);
+      if (dual_x_carriage_mode == DXC_DUPLICATION_MODE)
+        inactive_extruder_x = current_position.x + duplicate_extruder_x_offset;
+      else
+        inactive_extruder_x = _MIN(X2_MAX_POS - current_position.x, X2_HOME_POS);
+    }
+    dual_x_carriage_mode         = DEFAULT_DUAL_X_CARRIAGE_MODE;
+    idex_mirrored_mode           = false;
+    extruder_duplication_enabled = false;
+    stepper.apply_directions();
+    update_software_endstops(X_AXIS);
+  }
+
   /**
    * Prepare a linear move in a dual X axis setup
    *
@@ -1331,7 +1350,7 @@ FORCE_INLINE void segment_idle(millis_t &next_idle_ms) {
             if (delayed_move_time != 0xFFFFFFFFUL) {
               current_position = destination;
               NOLESS(raised_parked_position.z, destination.z);
-              delayed_move_time = millis() + 1000UL;
+              delayed_move_time = millis() + 100UL;
               return true;
             }
           }
@@ -1370,7 +1389,7 @@ FORCE_INLINE void segment_idle(millis_t &next_idle_ms) {
             if (dual_x_carriage_mode == DXC_DUPLICATION_MODE)
               new_pos.x = x0_pos + duplicate_extruder_x_offset;
             else
-              new_pos.x = _MIN(X_BED_SIZE - x0_pos, X_MAX_POS);
+              new_pos.x = _MIN(X2_MAX_POS - x0_pos, X2_HOME_POS);
 
             // Move duplicate extruder into the correct position
             if (DEBUGGING(LEVELING)) DEBUG_ECHOLNPGM("Set planner X", inactive_extruder_x, " ... Line to X", new_pos.x);
@@ -2305,6 +2324,12 @@ void prepare_line_to_destination() {
  * Callers must sync the planner position after calling this!
  */
 void set_axis_is_at_home(const AxisEnum axis) {
+  if (planner.cleaning_buffer_counter) {
+    set_axis_untrusted(axis);
+    set_axis_unhomed(axis);
+    return;
+  }
+
   if (DEBUGGING(LEVELING)) DEBUG_ECHOLNPGM(">>> set_axis_is_at_home(", C(AXIS_CHAR(axis)), ")");
 
   set_axis_trusted(axis);

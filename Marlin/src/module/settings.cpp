@@ -755,6 +755,7 @@ void MarlinSettings::postprocess() {
   #endif
 
   bool MarlinSettings::validating;
+  bool MarlinSettings::autoReset;
   int MarlinSettings::eeprom_index;
   uint16_t MarlinSettings::working_crc;
 
@@ -991,9 +992,20 @@ void MarlinSettings::postprocess() {
     //
     {
       _FIELD_TEST(planner_leveling_active);
+      #if ENABLED(AUTO_BED_LEVELING_BILINEAR)
+      const bool bilinear_active = TERN(AUTO_BED_LEVELING_BILINEAR, planner.leveling_active, false);
+      #else
       const bool ubl_active = TERN(AUTO_BED_LEVELING_UBL, planner.leveling_active, false);
+      #endif
+
       const int8_t storage_slot = TERN(AUTO_BED_LEVELING_UBL, bedlevel.storage_slot, -1);
+      
+      #if ENABLED(AUTO_BED_LEVELING_BILINEAR)
+      EEPROM_WRITE(bilinear_active);
+      #else
       EEPROM_WRITE(ubl_active);
+      #endif
+
       EEPROM_WRITE(storage_slot);
     }
 
@@ -1991,7 +2003,11 @@ void MarlinSettings::postprocess() {
           const bool &planner_leveling_active = planner.leveling_active;
           const int8_t &ubl_storage_slot = bedlevel.storage_slot;
         #else
+        #if ENABLED(AUTO_BED_LEVELING_BILINEAR)
+          const bool &planner_leveling_active = planner.leveling_active;
+        #else
           bool planner_leveling_active;
+        #endif
           int8_t ubl_storage_slot;
         #endif
         EEPROM_READ(planner_leveling_active);
@@ -2831,7 +2847,9 @@ void MarlinSettings::postprocess() {
       TERN_(EXTENSIBLE_UI, ExtUI::onSettingsLoaded(success));
       return success;
     }
+    autoReset = true;
     reset();
+    autoReset = false;
     #if ANY(EEPROM_AUTO_INIT, EEPROM_INIT_NOW)
       (void)save();
       SERIAL_ECHO_MSG("EEPROM Initialized");
@@ -3128,6 +3146,7 @@ void MarlinSettings::reset() {
   // Nozzle-to-probe Offset
   //
   #if HAS_BED_PROBE
+  if (autoReset) {
     constexpr float dpo[] = NOZZLE_TO_PROBE_OFFSET;
     static_assert(COUNT(dpo) == NUM_AXES, "NOZZLE_TO_PROBE_OFFSET must contain offsets for each linear axis X, Y, Z....");
     #if HAS_PROBE_XY_OFFSET
@@ -3135,6 +3154,7 @@ void MarlinSettings::reset() {
     #else
       probe.offset.set(NUM_AXIS_LIST(0, 0, dpo[Z_AXIS], 0, 0, 0, 0, 0, 0));
     #endif
+  }
   #endif
 
   //
@@ -3356,6 +3376,7 @@ void MarlinSettings::reset() {
   // Power-Loss Recovery
   //
   TERN_(POWER_LOSS_RECOVERY, recovery.enable(ENABLED(PLR_ENABLED_DEFAULT)));
+  if (autoReset) TERN_(POWER_LOSS_RECOVERY, recovery.purge());
 
   //
   // Firmware Retraction

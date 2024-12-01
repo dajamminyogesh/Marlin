@@ -211,5 +211,76 @@ struct duration_t {
     }
   }
 
+  /**
+   * @Autor CreatBot LYN
+   * @param buffer The array pointed to must be able to accommodate 13 bytes
+   *
+   * Output examples:
+   *  123456789012 (strlen)
+   *  [9999:59:59]
+   *  <99:59:59>
+   */
+  void toTimeREG(char *buffer, char prefixChar = '\0', char suffixChar = '\0') const {
+    uint16_t h = this->hour() % 10000, m = this->minute() % 60, s = this->second() % 60;
+    if ((prefixChar == '\0') || (suffixChar == '\0'))
+      sprintf_P(buffer, PSTR("%u:%02u:%02u"), h, m, s);
+    else
+      sprintf_P(buffer, PSTR("%c%u:%02u:%02u%c"), prefixChar, h, m, s, suffixChar);
+  }
+
+  /**
+   * @Autor CreatBot LYN
+   * @param buffer The array pointed to must be able to accommodate 9 bytes
+   *        Also, 11 bytes is necessary when h_len is 3.
+   *
+   * Output examples:
+   *  1234567890 (strlen)
+   *  9990995959      ->    999:59:59
+   *  8120125959      ->    812:59:59
+   *  99995959        ->    9999:59:59
+   *  010101          ->    01:01:01
+   */
+  void toTimeDWIN(char *buffer, uint8_t h_len) const {
+    uint16_t h = this->hour() % 10000, m = this->minute() % 60, s = this->second() % 60;
+
+    if (h_len == 4) {
+      buffer[0] = h / 1000 % 10 << 4 & 0xF0;
+      buffer[0] |= h / 100 % 10 & 0x0F;
+      buffer[1] = h / 10 % 10 << 4 & 0xF0;
+      buffer[1] |= h % 10 & 0x0F;
+      buffer[2] = (m / 10 << 4) & 0xF0;
+      buffer[2] |= m % 10 & 0x0F;
+      buffer[3] = (s / 10 << 4) & 0xF0;
+      buffer[3] |= s % 10 & 0x0F;
+    } else if (h_len == 2) {
+      sprintf_P(buffer, PSTR("%02u%02u%02u"), h % 100, m, s);
+    } else if (h_len == 3) {
+      buffer[0] = h / 100 % 10 << 4 & 0xF0;
+      buffer[0] |= h / 10 % 10 & 0x0F;
+      buffer[1] = h % 10 << 4 & 0xF0;
+      buffer[1] |= 0xF0;
+      buffer[2] = (h % 100) / 10 << 4 & 0xF0;
+      buffer[2] |= (h % 100) % 10 & 0x0F;
+      buffer[3] = (m / 10 << 4) & 0xF0;
+      buffer[3] |= m % 10 & 0x0F;
+      buffer[4] = (s / 10 << 4) & 0xF0;
+      buffer[4] |= s % 10 & 0x0F;
+    } else
+      sprintf_P(buffer, PSTR("%u%02u%02u"), h, m, s);
+  }
+
+  /**
+   * @Autor CreatBot LYN
+   * @param buffer The array pointed to must be able to accommodate 6 bytes
+   *
+   * Output examples:
+   * 12345 (strlen)
+   * 02:59
+   */
+  void toTimeShutDown(char *buffer) const {
+    uint16_t m = this->minute() % 60, s = this->second() % 60;
+    sprintf_P(buffer, PSTR("%02u:%02u"), m, s);
+  }
+
   #pragma GCC diagnostic pop
 };

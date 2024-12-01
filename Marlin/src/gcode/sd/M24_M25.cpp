@@ -60,6 +60,7 @@ void GcodeSuite::M24() {
   #if ENABLED(POWER_LOSS_RECOVERY)
     if (parser.seenval('S')) card.setIndex(parser.value_long());
     if (parser.seenval('T')) print_job_timer.resume(parser.value_long());
+    recovery.recoveryPrepare = false;
   #endif
 
   #if ENABLED(PARK_HEAD_ON_PAUSE)

@@ -602,6 +602,7 @@ void home_if_needed(const bool keeplev=false);
   void set_duplication_enabled(const bool dupe, const int8_t tool_index=-1);
   void idex_set_mirrored_mode(const bool mirr);
   void idex_set_parked(const bool park=true);
+  void reset_idex_mode();
 
 #else
 

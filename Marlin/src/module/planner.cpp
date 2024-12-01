@@ -129,7 +129,15 @@ volatile uint8_t Planner::block_buffer_head,    // Index of the next block to be
 uint16_t Planner::cleaning_buffer_counter;      // A counter to disable queuing of blocks
 uint8_t Planner::delay_before_delivering;       // Delay block delivery so initial blocks in an empty queue may merge
 
-planner_settings_t Planner::settings;           // Initialized by settings.load
+#if BOTH(FILTER_FAN_SUPPORT, HAS_TEMP_CHAMBER)
+  static bool air_fan_need_off = false;  // 默认开
+#endif
+
+#if BOTH(SYSTEM_FAN_SUPPORT, HAS_TEMP_CHAMBER)
+  static bool sys_fan_need_on = false;  // 默认关
+#endif
+
+planner_settings_t Planner::settings;           // Initialized by settings.load()
 
 /**
  * Set up inline block variables
@@ -1293,7 +1301,7 @@ void Planner::recalculate(TERN_(HINTS_SAFE_EXIT_SPEED, const_float_t safe_exit_s
     #else
       #define _FAN_SET(F) hal.set_pwm_duty(pin_t(FAN##F##_PIN), CALC_FAN_SPEED(fan_speed[F]));
     #endif
-    #define FAN_SET(F) do{ kickstart_fan(fan_speed, ms, F); _FAN_SET(F); }while(0)
+    #define FAN_SET(F) do{ extraFanControl(fan_speed, F); kickstart_fan(fan_speed, ms, F); _FAN_SET(F); }while(0)
 
     const millis_t ms = millis();
     TERN_(HAS_FAN0, FAN_SET(0)); TERN_(HAS_FAN1, FAN_SET(1));
@@ -1320,6 +1328,21 @@ void Planner::recalculate(TERN_(HINTS_SAFE_EXIT_SPEED, const_float_t safe_exit_s
 
   #endif
 
+  #if HAS_EXTRA_FAN_CONTORL
+    void Planner::extraFanControl(uint8_t (&fan_speed)[FAN_COUNT], const uint8_t f) {
+      #if BOTH(FILTER_FAN_SUPPORT, HAS_TEMP_CHAMBER)
+        if ((f == FILTER_FAN_INDEX) && air_fan_need_off) {
+          fan_speed[f] = FAN_OFF_PWM;
+        }
+      #endif
+      #if BOTH(SYSTEM_FAN_SUPPORT, HAS_TEMP_CHAMBER)
+        if ((f == SYSTEM_FAN_INDEX)) {
+          fan_speed[f] = sys_fan_need_on ? FAN_MAX_PWM : FAN_OFF_PWM;
+        }
+      #endif
+    }
+  #endif
+
 #endif // HAS_FAN
 
 /**
@@ -1344,6 +1367,35 @@ void Planner::check_axes_activity() {
     #if HAS_HEATER_2
       uint8_t tail_e_to_p_pressure;
     #endif
+  #endif
+
+  #if BOTH(FILTER_FAN_SUPPORT, HAS_TEMP_CHAMBER)
+    bool is_air_should_off = air_fan_need_off;
+
+    #if ENABLED(UNIQUE_LOGIC_PEEK250)
+      is_air_should_off = (thermalManager.degTargetChamber() > 0);
+    #else
+      if (ABS(thermalManager.degChamber() - thermalManager.degTargetChamber()) > 1.0f)
+        is_air_should_off = thermalManager.isHeatingChamber();
+    #endif
+
+    if (air_fan_need_off ^ is_air_should_off) {
+      air_fan_need_off = is_air_should_off;
+      fans_need_update = true;
+    }
+  #endif
+
+  #if BOTH(SYSTEM_FAN_SUPPORT, HAS_TEMP_CHAMBER)
+    bool is_sys_temp_high = sys_fan_need_on;
+    if (thermalManager.degChamber() > TEMP_SYSFAN_ON) {
+      is_sys_temp_high = true;
+    } else if (thermalManager.degChamber() < TEMP_SYSFAN_OFF) {
+      is_sys_temp_high = false;
+    }
+    if (sys_fan_need_on ^ is_sys_temp_high) {
+      sys_fan_need_on  = is_sys_temp_high;
+      fans_need_update = true;
+    }
   #endif
 
   if (has_blocks_queued()) {
@@ -1733,7 +1785,7 @@ float Planner::triggered_position_mm(const AxisEnum axis) {
 }
 
 bool Planner::busy() {
-  return (has_blocks_queued() || cleaning_buffer_counter
+  return (has_blocks_queued() || !stepper.is_full_stop()
       || TERN0(EXTERNAL_CLOSED_LOOP_CONTROLLER, CLOSED_LOOP_WAITING())
       || TERN0(HAS_ZV_SHAPING, stepper.input_shaping_busy())
   );
@@ -2936,7 +2988,11 @@ bool Planner::_populate_block(
   position = target;  // Update the position
 
   #if ENABLED(POWER_LOSS_RECOVERY)
-    block->sdpos = recovery.command_sdpos();
+    #if ENABLED(SDSUPPORT)
+      block->filepos = recovery.command_sdpos();
+    #elif ENABLED(CANFILE)
+      block->filepos = recovery.command_canfilepos();
+    #endif
     block->start_position = position_float.asLogical();
   #endif
 

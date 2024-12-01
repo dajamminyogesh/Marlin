@@ -87,6 +87,11 @@ MediaFile CardReader::root, CardReader::workDir, CardReader::workDirParents[MAX_
 uint8_t CardReader::workDirDepth;
 int16_t CardReader::nrItems = -1;
 
+#if ENABLED(POWER_LOSS_RECOVERY)
+  static uint8_t ReworkDirDepth;
+  static bool    ReworkDirIsRoot;
+#endif
+
 #if ENABLED(SDCARD_SORT_ALPHA)
 
   int16_t CardReader::sort_count;
@@ -510,6 +515,9 @@ void CardReader::manage_media() {
     TERN_(RESET_STEPPERS_ON_MEDIA_INSERT, reset_stepper_drivers()); // Workaround for Cheetah bug
   }
   else {
+    #if ENABLED(POWER_LOSS_RECOVERY)
+      if(IS_SD_PRINTING()) { ReworkDirIsRoot = flag.workDirIsRoot; ReworkDirDepth = workDirDepth; }
+    #endif
     TERN_(HAS_SD_DETECT, release()); // Card is released
   }
 
@@ -518,6 +526,9 @@ void CardReader::manage_media() {
   if (!stat) return;                // Exit if no media is present
 
   bool do_auto = true; UNUSED(do_auto);
+  #if ENABLED(POWER_LOSS_RECOVERY)
+    if(IS_SD_PAUSED()) { flag.workDirIsRoot = ReworkDirIsRoot; workDirDepth = ReworkDirDepth; }
+  #endif
 
   // First mount on boot? Load emulated EEPROM and look for PLR file.
   if (old_stat == 2) {
@@ -580,6 +591,7 @@ void CardReader::startOrResumeFilePrinting() {
     flag.sdprinting = true;
     flag.sdprintdone = false;
     TERN_(SD_RESORT, flush_presort());
+    TERN_(POWER_LOSS_RECOVERY, recovery.purge());
   }
 }
 
@@ -589,6 +601,7 @@ void CardReader::startOrResumeFilePrinting() {
 void CardReader::endFilePrintNow(TERN_(SD_RESORT, const bool re_sort/*=false*/)) {
   TERN_(ADVANCED_PAUSE_FEATURE, did_pause_print = 0);
   TERN_(DWIN_CREALITY_LCD, HMI_flag.print_finish = flag.sdprinting);
+  TERN_(POWER_LOSS_RECOVERY, recovery.recoveryPrepare = false);
   flag.abort_sd_printing = false;
   if (isFileOpen()) file.close();
   TERN_(SD_RESORT, if (re_sort) presort());
@@ -705,7 +718,11 @@ void CardReader::openFileRead(const char * const path, const uint8_t subcall_typ
     }
 
     selectFileByName(fname);
+  #if ENABLED(UTF_IS_UTF16)
+    ui.set_status(fname);
+  #else
     ui.set_status(longFilename[0] ? longFilename : fname);
+  #endif
   }
   else
     openFailed(fname);
@@ -879,6 +896,16 @@ void CardReader::closefile(const bool store_location/*=false*/) {
   }
 }
 
+bool CardReader::selectNextValidFile(dir_t *p) {
+  while (workDir.readDir(p, longFilename) > 0) {
+      if (is_visible_entity(*p)) {
+        createFilename(filename, *p);
+        return true;
+      }
+  }
+  return false;
+}
+
 //
 // Get info for a file in the working directory by index
 //
@@ -967,7 +994,7 @@ const char* CardReader::diveToFile(const bool update_cwd, MediaFile* &inDirPtr, 
     // Isolate the next subitem name
     const uint8_t len = name_end - atom_ptr;
     char dosSubdirname[len + 1];
-    strncpy(dosSubdirname, atom_ptr, len);
+    strlcpy(dosSubdirname, atom_ptr, len + 1);
 
     if (echo) SERIAL_ECHOLN(dosSubdirname);
 
@@ -1309,6 +1336,10 @@ void CardReader::fileHasFinished() {
 
   flag.sdprintdone = true;        // Stop getting bytes from the SD card
   marlin_state = MF_SD_COMPLETE;  // Tell Marlin to enqueue M1001 soon
+}
+
+void CardReader::abortFilePrintSoon() {
+  flag.abort_sd_printing = isFileOpen() || TERN0(POWER_LOSS_RECOVERY, recovery.recoveryPrepare);
 }
 
 #if ENABLED(AUTO_REPORT_SD_STATUS)
