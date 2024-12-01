@@ -119,6 +119,7 @@
 #endif // DO_SWITCH_EXTRUDER
 
 #if ENABLED(SWITCHING_NOZZLE)
+  bool is_nozzle_servo_align = false;
 
   #if SWITCHING_NOZZLE_TWO_SERVOS
 
@@ -138,6 +139,13 @@
       planner.synchronize();
       servo[SWITCHING_NOZZLE_SERVO_NR].move(servo_angles[SWITCHING_NOZZLE_SERVO_NR][angle_index]);
       safe_delay(SWITCHING_NOZZLE_SERVO_DWELL);
+    }
+
+    void align_nozzle_servo(){
+      planner.synchronize();
+      servo[SWITCHING_NOZZLE_SERVO_NR].move(SWITCHING_NOZZLE_SERVO_ALIGN);
+      safe_delay(SWITCHING_NOZZLE_SERVO_DWELL);
+      is_nozzle_servo_align = true;
     }
 
   #endif
@@ -841,15 +849,15 @@ void fast_line_to_current(const AxisEnum fr_axis) { _line_to_current(fr_axis, 0.
     switch (dual_x_carriage_mode) {
       case DXC_FULL_CONTROL_MODE: DEBUG_ECHOLNPGM("FULL_CONTROL"); break;
       case DXC_AUTO_PARK_MODE:    DEBUG_ECHOLNPGM("AUTO_PARK");    break;
-      case DXC_DUPLICATION_MODE:  DEBUG_ECHOLNPGM("DUPLICATION");  break;
-      case DXC_MIRRORED_MODE:     DEBUG_ECHOLNPGM("MIRRORED");     break;
+      case DXC_DUPLICATION_MODE:  DEBUG_ECHOLNPGM("DUPLICATION");  return;
+      case DXC_MIRRORED_MODE:     DEBUG_ECHOLNPGM("MIRRORED");     return;
     }
 
     // Get the home position of the currently-active tool
     const float xhome = x_home_pos(active_extruder);
 
     if (dual_x_carriage_mode == DXC_AUTO_PARK_MODE                  // If Auto-Park mode is enabled
-        && IsRunning() && !no_move                                  // ...and movement is permitted
+        && IsRunning() && axis_is_trusted(X_AXIS)                   // ...and X_AXIS is trusted
         && (delayed_move_time || current_position.x != xhome)       // ...and delayed_move_time is set OR not "already parked"...
     ) {
       DEBUG_ECHOLNPGM("MoveX to ", xhome);
@@ -862,7 +870,7 @@ void fast_line_to_current(const AxisEnum fr_axis) { _line_to_current(fr_axis, 0.
     active_extruder = new_tool;
 
     // This function resets the max/min values - the current position may be overwritten below.
-    set_axis_is_at_home(X_AXIS);
+    current_position.x = x_home_pos(active_extruder);
 
     DEBUG_POS("New Extruder", current_position);
 
@@ -875,7 +883,13 @@ void fast_line_to_current(const AxisEnum fr_axis) { _line_to_current(fr_axis, 0.
         DEBUG_ECHOLNPGM("DXC Full Control curr.x=", current_position.x, " dest.x=", destination.x);
         break;
       case DXC_AUTO_PARK_MODE:
-        idex_set_parked();
+        if (!axis_is_trusted(X_AXIS)) {
+          current_position.x  = inactive_extruder_x;
+          inactive_extruder_x = destination.x;
+        } else {
+          inactive_extruder_x = xhome;
+          idex_set_parked();
+        }
         break;
       default:
         break;
@@ -1150,7 +1164,9 @@ void tool_change(const uint8_t new_tool, bool no_move/*=false*/) {
     if (new_tool >= EXTRUDERS)
       return invalid_extruder_error(new_tool);
 
-    if (!no_move && homing_needed()) {
+    const bool can_move_x = !no_move && axis_is_trusted(X_AXIS);
+
+    if (!no_move && !all_axes_trusted()) {
       no_move = true;
       DEBUG_ECHOLNPGM("No move (not homed)");
     }
@@ -1179,8 +1195,10 @@ void tool_change(const uint8_t new_tool, bool no_move/*=false*/) {
       }
     #endif
 
-    if (new_tool != old_tool || TERN0(PARKING_EXTRUDER, extruder_parked)) { // PARKING_EXTRUDER may need to attach old_tool when homing
-      destination = current_position;
+    if (new_tool != old_tool ||
+        TERN0(SWITCHING_NOZZLE, is_nozzle_servo_align) ||  // 当前喷头处于对齐状态
+        TERN0(PARKING_EXTRUDER, extruder_parked)) {        // PARKING_EXTRUDER may need to attach old_tool when homing
+        destination = current_position;
 
       #if ALL(TOOLCHANGE_FILAMENT_SWAP, HAS_FAN) && TOOLCHANGE_FS_FAN >= 0
         // Store and stop fan. Restored on any exit.
@@ -1398,7 +1416,15 @@ void tool_change(const uint8_t new_tool, bool no_move/*=false*/) {
 
     } // (new_tool != old_tool)
 
+    if(TERN0(DUAL_X_CARRIAGE, can_move_x)){
+      destination = current_position;
+      apply_motion_limits(destination);
+      prepare_line_to_destination();
+    }
+
     planner.synchronize();
+
+    TERN_(SWITCHING_NOZZLE, is_nozzle_servo_align = false);
 
     #if ENABLED(EXT_SOLENOID) && DISABLED(PARKING_EXTRUDER)
       disable_all_solenoids();

@@ -136,11 +136,6 @@
 
 #endif
 
-// No inactive extruders with SWITCHING_NOZZLE or Průša MMU1
-#if ANY(SWITCHING_NOZZLE, HAS_PRUSA_MMU1)
-  #undef DISABLE_OTHER_EXTRUDERS
-#endif
-
 // Default E steppers / manual motion is one per extruder
 #ifndef E_STEPPERS
   #define E_STEPPERS EXTRUDERS
@@ -993,15 +988,24 @@
 #endif
 
 // Aliases for LCD features
-#if ANY(DGUS_LCD_UI_ORIGIN, DGUS_LCD_UI_FYSETC, DGUS_LCD_UI_HIPRECY, DGUS_LCD_UI_MKS, DGUS_LCD_UI_RELOADED)
+#if ANY(DGUS_LCD_UI_ORIGIN, DGUS_LCD_UI_FYSETC, DGUS_LCD_UI_HIPRECY, DGUS_LCD_UI_MKS)
+  #define HAS_DGUS_LCD_CLASSIC 1
+#endif
+
+#if ANY(HAS_DGUS_LCD_CLASSIC, DGUS_LCD_UI_RELOADED, DGUS_LCD_UI_CREATBOT)
   #define HAS_DGUS_LCD 1
-  #if DISABLED(DGUS_LCD_UI_RELOADED)
-    #define HAS_DGUS_LCD_CLASSIC 1
-  #endif
+#endif
+
+#if ANY(DGUS_LCD_UI_CREATBOT, CREATBOT_LINUX_LCD)
+  #define CREATBOT_LCD 1
+#endif
+
+#if ENABLED(CREATBOT_LINUX_LCD)
+  #define CANOPEN_LCD 1
 #endif
 
 // Extensible UI serial touch screens. (See src/lcd/extui)
-#if ANY(HAS_DGUS_LCD, MALYAN_LCD, ANYCUBIC_LCD_I3MEGA, ANYCUBIC_LCD_CHIRON, NEXTION_TFT, TOUCH_UI_FTDI_EVE)
+#if ANY(HAS_DGUS_LCD, CREATBOT_LCD, MALYAN_LCD, ANYCUBIC_LCD_I3MEGA, ANYCUBIC_LCD_CHIRON, NEXTION_TFT, TOUCH_UI_FTDI_EVE)
   #define IS_EXTUI 1 // Just for sanity check.
   #define EXTENSIBLE_UI
 #endif
@@ -1097,8 +1101,8 @@
 #endif
 
 // No inactive extruders with SWITCHING_NOZZLE or Průša MMU1 or just 1 E stepper exists
-#if ENABLED(SWITCHING_NOZZLE) || HAS_PRUSA_MMU1 || E_STEPPERS < 2
-  #undef DISABLE_INACTIVE_EXTRUDER
+#if ENABLED(SWITCHING_EXTRUDER) || HAS_PRUSA_MMU1 || E_STEPPERS < 2
+  #undef DISABLE_OTHER_EXTRUDERS
 #endif
 
 // Switching extruder has its own servo?

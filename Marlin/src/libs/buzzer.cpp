@@ -81,4 +81,15 @@ void Buzzer::tick() {
   else if (ELAPSED(now, state.endtime)) reset();
 }
 
+void Buzzer::waitDone(const uint16_t timeout) {
+  millis_t now    = millis();
+  millis_t expire = now + timeout;
+
+  while ((!buffer.isEmpty() || state.endtime) && PENDING(now, expire)) {
+    tick();
+    thermalManager.task();
+    now = millis();
+  }
+}
+
 #endif // HAS_BEEPER

@@ -270,7 +270,7 @@ typedef struct PlannerBlock {
   #endif
 
   #if ENABLED(POWER_LOSS_RECOVERY)
-    uint32_t sdpos;
+    uint32_t filepos;
     xyze_pos_t start_position;
   #endif
 
@@ -599,6 +599,11 @@ class Planner {
         static void kickstart_fan(uint8_t (&fan_speed)[FAN_COUNT], const millis_t &ms, const uint8_t f);
       #else
         FORCE_INLINE static void kickstart_fan(uint8_t (&)[FAN_COUNT], const millis_t &, const uint8_t) {}
+      #endif
+      #if HAS_EXTRA_FAN_CONTORL
+        static void extraFanControl(uint8_t (&fan_speed)[FAN_COUNT], const uint8_t f);
+      #else
+        FORCE_INLINE static void extraFanControl(uint8_t (&)[FAN_COUNT], const uint8_t) {}
       #endif
     #endif
 

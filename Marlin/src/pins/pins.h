@@ -721,6 +721,10 @@
   #include "stm32f4/pins_MKS_EAGLE.h"               // STM32F4                              env:mks_eagle env:mks_eagle_usb_flash_drive env:mks_eagle_usb_flash_drive_msc
 #elif MB(ARTILLERY_RUBY)
   #include "stm32f4/pins_ARTILLERY_RUBY.h"          // STM32F4                              env:Artillery_Ruby
+#elif MB(CREATBOT_V1_0)
+  #include "stm32f4/pins_CreatBot_F446_V1_0.h"      // STM32F4                              env:CreatBot_F446
+#elif MB(CREATBOT_V2_0)
+  #include "stm32f4/pins_CreatBot_F446_V2_0.h"      // STM32F4                              env:CreatBot_F446
 #elif MB(CREALITY_V24S1_301F4)
   #include "stm32f4/pins_CREALITY_V24S1_301F4.h"    // STM32F4                              env:STM32F401RC_creality env:STM32F401RC_creality_nobootloader env:STM32F401RC_creality_jlink env:STM32F401RC_creality_stlink
 #elif MB(OPULO_LUMEN_REV4)

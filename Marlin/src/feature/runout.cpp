@@ -33,6 +33,7 @@
 FilamentMonitor runout;
 
 bool FilamentMonitorBase::enabled = true,
+     FilamentMonitorBase::filament_insert = true,
      FilamentMonitorBase::filament_ran_out;  // = false
 
 #if ENABLED(HOST_ACTION_COMMANDS)

@@ -75,30 +75,15 @@
         case DXC_AUTO_PARK_MODE:
           break;
 
+        case DXC_MIRRORED_MODE:
+          idex_set_mirrored_mode(true);
         case DXC_DUPLICATION_MODE:
           // Set the X offset, but no less than the safety gap
           if (parser.seenval('X')) duplicate_extruder_x_offset = _MAX(parser.value_linear_units(), (X2_MIN_POS) - (X1_MIN_POS));
           if (parser.seenval('R')) duplicate_extruder_temp_offset = parser.value_celsius_diff();
           // Always switch back to tool 0
-          if (active_extruder != 0) tool_change(0);
+          active_extruder = 0;
           break;
-
-        case DXC_MIRRORED_MODE: {
-          if (previous_mode != DXC_DUPLICATION_MODE) {
-            SERIAL_ECHOLNPGM("Printer must be in DXC_DUPLICATION_MODE prior to ");
-            SERIAL_ECHOLNPGM("specifying DXC_MIRRORED_MODE.");
-            dual_x_carriage_mode = DEFAULT_DUAL_X_CARRIAGE_MODE;
-            return;
-          }
-          idex_set_mirrored_mode(true);
-
-          // Do a small 'jog' motion in the X axis
-          xyze_pos_t dest = current_position; dest.x -= 0.1f;
-          for (uint8_t i = 2; --i;) {
-            planner.buffer_line(dest, feedrate_mm_s, 0);
-            dest.x += 0.1f;
-          }
-        } return;
 
         default:
           dual_x_carriage_mode = DEFAULT_DUAL_X_CARRIAGE_MODE;
@@ -107,13 +92,14 @@
 
       idex_set_parked(false);
       set_duplication_enabled(false);
+      update_software_endstops(X_AXIS);
 
       #ifdef EVENT_GCODE_IDEX_AFTER_MODECHANGE
         process_subcommands_now(F(EVENT_GCODE_IDEX_AFTER_MODECHANGE));
       #endif
     }
     else if (!parser.seen('W'))  // if no S or W parameter, the DXC mode gets reset to the user's default
-      dual_x_carriage_mode = DEFAULT_DUAL_X_CARRIAGE_MODE;
+      reset_idex_mode();
 
     #ifdef DEBUG_DXC_MODE
 

@@ -106,6 +106,7 @@ class MarlinSettings {
     #if ENABLED(EEPROM_SETTINGS)
 
       static bool validating;
+      static bool autoReset;
 
       #if ENABLED(AUTO_BED_LEVELING_UBL)  // Eventually make these available if any leveling system
                                           // That can store is enabled

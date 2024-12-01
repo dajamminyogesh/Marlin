@@ -49,9 +49,6 @@
   #include "stepper/speed_lookuptable.h"
 #endif
 
-// Disable multiple steps per ISR
-//#define DISABLE_MULTI_STEPPING
-
 //
 // Estimate the amount of time the Stepper ISR will take to execute
 //
@@ -703,6 +700,9 @@ class Stepper {
 
     // Quickly stop all steppers
     FORCE_INLINE static void quick_stop() { abort_current_block = true; }
+
+    // 判断电机中断是否完全停止动作,主要用于同步操作
+    FORCE_INLINE static bool is_full_stop() { return current_block == nullptr; }
 
     // The direction of a single motor
     FORCE_INLINE static bool motor_direction(const AxisEnum axis) { return TEST(last_direction_bits, axis); }

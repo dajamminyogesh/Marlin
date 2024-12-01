@@ -1218,6 +1218,8 @@ private:
 
   static void M999();
 
+  static void M9999();
+
   #if ENABLED(POWER_LOSS_RECOVERY)
     static void M413();
     static void M413_report(const bool forReplay=true);
@@ -1229,7 +1231,7 @@ private:
     static void M423_report(const bool forReplay=true);
   #endif
 
-  #if HAS_MEDIA
+  #if EITHER(HAS_MEDIA, CANFILE)
     static void M1001();
   #endif
 
@@ -1239,6 +1241,11 @@ private:
 
   #if ENABLED(UBL_MESH_WIZARD)
     static void M1004();
+  #endif
+
+  #if ENABLED(ANNEALING_SUPPORT)
+    static void M1010();
+    static void M1010_report(const bool forReplay=true);
   #endif
 
   #if ENABLED(HAS_MCP3426_ADC)

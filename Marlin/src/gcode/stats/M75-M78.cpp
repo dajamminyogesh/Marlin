@@ -65,11 +65,16 @@ void GcodeSuite::M77() {
    */
   void GcodeSuite::M78() {
     if (parser.intval('S') == 78) {  // "M78 S78" will reset the statistics
-      print_job_timer.initStats();
-      ui.reset_status();
+        SERIAL_ECHOLNPGM(STR_UNREGISTERED);
+        LCD_MESSAGE(MSG_UNREGISTERED);
       return;
     }
 
+    if (parser.seenval('T')) {
+      SERIAL_ECHOLNPGM(STR_UNREGISTERED);
+      LCD_MESSAGE(MSG_UNREGISTERED);
+      return;
+    }
     #if HAS_SERVICE_INTERVALS
       if (parser.seenval('R')) {
         print_job_timer.resetServiceInterval(parser.value_int());

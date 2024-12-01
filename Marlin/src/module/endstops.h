@@ -155,6 +155,8 @@ class Endstops {
     static bool enabled, enabled_globally;
     static endstop_mask_t live_state;
     static volatile endstop_mask_t hit_state; // Use X_MIN, Y_MIN, Z_MIN and Z_MIN_PROBE as BIT index
+    static uint8_t endstop_disable_count;  // 零位禁用的计数. 在Poll函数里面自减(温度中断调用, 每1ms减1).
+                                           // 用于零位生效的时间阈值设置.
 
     #if ENDSTOP_NOISE_THRESHOLD
       static endstop_mask_t validated_live_state;
@@ -239,6 +241,9 @@ class Endstops {
 
     // Disable / Enable endstops based on ENSTOPS_ONLY_FOR_HOMING and global enable
     static void not_homing();
+
+    // 设置零位生效的阈值时间
+    static void setDisableCount(const uint8_t count);
 
     #if ENABLED(VALIDATE_HOMING_ENDSTOPS)
       // If the last move failed to trigger an endstop, call kill

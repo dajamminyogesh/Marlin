@@ -212,6 +212,8 @@ public:
    */
   static void set_current_line_number(long n) { serial_state[ring_buffer.command_port().index].last_N = n; }
 
+  static long get_current_line_number() { return serial_state[ring_buffer.command_port().index].last_N; }
+
   #if ENABLED(BUFFER_MONITORING)
 
     private:
@@ -258,6 +260,10 @@ private:
 
   #if HAS_MEDIA
     static void get_sdcard_commands();
+  #endif
+
+  #if ENABLED(CANFILE)
+    static void get_can_commands();
   #endif
 
   // Process the next "immediate" command (PROGMEM)

@@ -112,6 +112,8 @@ namespace ExtUI {
     bool getHostKeepaliveIsPaused();
   #endif
 
+  bool isAnyHeating();
+
   #if ENABLED(JOYSTICK)
     void jog(const xyz_float_t &dir);
     void _joystick_update(xyz_float_t &norm_jog);
@@ -262,8 +264,10 @@ namespace ExtUI {
   void coolDown();
 
   // Motion Control
-  void setAxisPosition_mm(const_float_t, const axis_t, const feedRate_t=0);
-  void setAxisPosition_mm(const_float_t, const extruder_t, const feedRate_t=0);
+  void setAxisPosition_mm(const_float_t, const axis_t, const feedRate_t=0, const bool=true);
+  void setAxisPosition_mm(const_float_t, const extruder_t, const feedRate_t=0, const bool=true);
+  void preOffsetAxisPosition_mm(const_float_t, const axis_t);
+  void preOffsetAxisPosition_mm(const_float_t, const extruder_t);
 
   // Planner Control
   void setAxisSteps_per_mm(const_float_t, const axis_t);
@@ -321,6 +325,8 @@ namespace ExtUI {
 
     bool babystepAxis_steps(const int16_t steps, const axis_t axis);
     void smartAdjustAxis_steps(const int16_t steps, const axis_t axis, bool linked_nozzles);
+
+    float getBabyStepAxisTotal_mm(const axis_t axis);
   #endif
 
   // Hotend Offsets
@@ -360,6 +366,7 @@ namespace ExtUI {
     void setFilamentRunoutEnabled(const bool);
     bool getFilamentRunoutState();
     void setFilamentRunoutState(const bool);
+    bool getFilamentInsertState();
 
     #if HAS_FILAMENT_RUNOUT_DISTANCE
       float getFilamentRunoutDistance_mm();
@@ -425,6 +432,7 @@ namespace ExtUI {
   bool isMediaInserted();
   bool isPrintingFromMediaPaused();
   bool isPrintingFromMedia();
+  bool isPrintingFromSerial();
   bool isPrinting();
   bool isPrintingPaused();
 
@@ -460,6 +468,7 @@ namespace ExtUI {
   void onMediaError();
   void onMediaRemoved();
   void onPlayTone(const uint16_t frequency, const uint16_t duration=0);
+  void onPrinterPoweroff();
   void onPrinterKilled(FSTR_P const error, FSTR_P const component);
   void onPrintTimerStarted();
   void onPrintTimerPaused();
@@ -484,6 +493,9 @@ namespace ExtUI {
     void onSetPowerLoss(const bool onoff);
     void onPowerLoss();
     void onPowerLossResume();
+  #endif
+  #if ENABLED(CREATBOT_LINUX_LCD)
+    void onPowerOffSafety();
   #endif
   #if HAS_PID_HEATING
     void onPidTuning(const result_t rst);

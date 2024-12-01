@@ -1001,6 +1001,11 @@ void reset_stepper_drivers();    // Called by settings.load / settings.reset
   #define SHOULD_ENABLE(N)  !axis_sw_enabled.N
   #define SHOULD_DISABLE(N)  axis_sw_enabled.N
   #define AFTER_CHANGE(N,TF) axis_sw_enabled.N = TF
+#elif ENABLED(DELAY_DRIVER_ENABLE)
+  extern xyz_bool_t axis_delay_enabled;
+  #define SHOULD_ENABLE(N)  !axis_delay_enabled.N
+  #define SHOULD_DISABLE(N)  axis_delay_enabled.N
+  #define AFTER_CHANGE(N,TF) safe_delay(STEPPER_ENABLE_DELAY); axis_delay_enabled.N = TF
 #else
   #define SHOULD_ENABLE(N)   true
   #define SHOULD_DISABLE(N)  true

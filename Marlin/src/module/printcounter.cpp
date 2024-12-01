@@ -234,6 +234,11 @@ void PrintCounter::showStats() {
   #endif
 }
 
+void PrintCounter::setStatsPrintTime(millis_t sec) {
+  data.printTime = sec;
+  saveStats();
+}
+
 void PrintCounter::tick() {
   if (!isRunning()) return;
 

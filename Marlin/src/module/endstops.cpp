@@ -63,6 +63,8 @@ bool Endstops::enabled, Endstops::enabled_globally; // Initialized by settings.l
 volatile Endstops::endstop_mask_t Endstops::hit_state;
 Endstops::endstop_mask_t Endstops::live_state = 0;
 
+uint8_t Endstops::endstop_disable_count;
+
 #if ENABLED(BD_SENSOR)
   bool Endstops::bdp_state; // = false
   #define READ_ENDSTOP(P) ((P == Z_MIN_PIN) ? bdp_state : READ(P))
@@ -427,6 +429,8 @@ void Endstops::poll() {
 
   TERN_(PINS_DEBUGGING, run_monitor()); // Report changes in endstop status
 
+  if (endstop_disable_count > 0) endstop_disable_count--;
+
   #if DISABLED(ENDSTOP_INTERRUPTS_FEATURE)
     update();
   #elif ENDSTOP_NOISE_THRESHOLD
@@ -450,6 +454,11 @@ void Endstops::not_homing() {
   enabled = enabled_globally;
 }
 
+// 设置零位生效的阈值时间
+void Endstops::setDisableCount(const uint8_t count){
+  endstop_disable_count = count;
+}
+
 #if ENABLED(VALIDATE_HOMING_ENDSTOPS)
   // If the last move failed to trigger an endstop, call kill
   void Endstops::validate_homing_move() {
@@ -471,6 +480,8 @@ void Endstops::not_homing() {
 
 // Get the stable endstop states when enabled
 void Endstops::resync() {
+  if (endstop_disable_count) return;  // 零位当前不可用
+
   if (!abort_enabled()) return;     // If endstops/probes are disabled the loop below can hang
 
   // Wait for Temperature ISR to run at least once (runs at 1kHz)
@@ -702,6 +713,7 @@ void __O2 Endstops::report_states() {
  * axes moving in the direction of their endstops, and abort moves.
  */
 void Endstops::update() {
+  if (endstop_disable_count) return;  // 零位当前不可用
 
   #if !ENDSTOP_NOISE_THRESHOLD      // If not debouncing...
     if (!abort_enabled()) return;   // ...and not enabled, exit.

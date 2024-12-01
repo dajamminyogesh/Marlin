@@ -65,13 +65,15 @@ int8_t libServo::attach(const int pin) {
 int8_t libServo::attach(const int pin, const int min, const int max) {
   if (servoCount >= MAX_SERVOS) return -1;
   if (pin > 0) servo_pin = pin;
+  min_pulse = min;
+  max_pulse = max;
   auto result = stm32_servo.attach(servo_pin, min, max);
   fixServoTimerInterruptPriority();
   return result;
 }
 
 void libServo::move(const int value) {
-  if (attach(0) >= 0) {
+  if (attach(0, min_pulse, max_pulse) >= 0) {
     stm32_servo.write(value);
     safe_delay(delay);
     TERN_(DEACTIVATE_SERVOS_AFTER_MOVE, detach());

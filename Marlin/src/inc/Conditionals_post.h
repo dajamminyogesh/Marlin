@@ -1837,7 +1837,8 @@
                           || (defined(SERIAL_PORT_2)    && N == SERIAL_PORT_2) \
                           || (defined(SERIAL_PORT_3)    && N == SERIAL_PORT_3) \
                           || (defined(MMU2_SERIAL_PORT) && N == MMU2_SERIAL_PORT) \
-                          || (defined(LCD_SERIAL_PORT)  && N == LCD_SERIAL_PORT) )
+                          || (defined(LCD_SERIAL_PORT)  && N == LCD_SERIAL_PORT) \
+                          || (defined(WiFi_SERIAL_PORT) && N == WiFi_SERIAL_PORT) ) 
 
 // Flag the named hardware serial ports in use
 #define TMC_UART_IS(A,N) (defined(A##_HARDWARE_SERIAL) && (CAT(HW_,A##_HARDWARE_SERIAL) == HW_Serial##N || CAT(HW_,A##_HARDWARE_SERIAL) == HW_MSerial##N))
@@ -2599,6 +2600,13 @@
   #error "FAN_OFF_PWM must be less than or equal to FAN_MIN_PWM."
 #endif
 
+/** 
+ * Extra Fan Contorl
+ */
+#if ANY(FILTER_FAN_SUPPORT, SYSTEM_FAN_SUPPORT)
+  #define HAS_EXTRA_FAN_CONTORL 1
+#endif
+
 /**
  * Controller Fan Settings
  */
@@ -2663,6 +2671,9 @@
   #undef DEACTIVATE_SERVOS_AFTER_MOVE
   #undef EDITABLE_SERVO_ANGLES
   #undef SERVO_DETACH_GCODE
+  #undef SERVO0_PULSE_CUSTOM
+  #undef SERVO1_PULSE_CUSTOM
+  #undef SERVO_SPEED_SLOWLY
 #endif
 
 // Sensors
@@ -3209,7 +3220,7 @@
 #endif
 
 // Number of VFAT entries used. Each entry has 13 UTF-16 characters
-#if ANY(SCROLL_LONG_FILENAMES, HAS_DWIN_E3V2, TFT_COLOR_UI)
+#if ANY(SCROLL_LONG_FILENAMES, HAS_DWIN_E3V2, TFT_COLOR_UI, CREATBOT_LCD)
   #define VFAT_ENTRIES_LIMIT 5
 #else
   #define VFAT_ENTRIES_LIMIT 2

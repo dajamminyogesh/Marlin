@@ -38,7 +38,7 @@
   #include "../lcd/extui/ui_api.h"
 #endif
 
-//#define FILAMENT_RUNOUT_SENSOR_DEBUG
+// #define FILAMENT_RUNOUT_SENSOR_DEBUG
 #ifndef FILAMENT_RUNOUT_THRESHOLD
   #define FILAMENT_RUNOUT_THRESHOLD 5
 #endif
@@ -65,7 +65,7 @@ extern FilamentMonitor runout;
 
 class FilamentMonitorBase {
   public:
-    static bool enabled, filament_ran_out;
+    static bool enabled, filament_insert, filament_ran_out;
 
     #if ENABLED(HOST_ACTION_COMMANDS)
       static bool host_handling;
@@ -89,6 +89,7 @@ class TFilamentMonitor : public FilamentMonitorBase {
     }
 
     static void reset() {
+      filament_insert = true;
       filament_ran_out = false;
       response.reset();
     }
@@ -115,7 +116,7 @@ class TFilamentMonitor : public FilamentMonitorBase {
 
     // Give the response a chance to update its counter.
     static void run() {
-      if (enabled && !filament_ran_out && (printingIsActive() || did_pause_print)) {
+      if (enabled) {
         TERN_(HAS_FILAMENT_RUNOUT_DISTANCE, cli()); // Prevent RunoutResponseDelayed::block_completed from accumulating here
         response.run();
         sensor.run();
@@ -151,7 +152,9 @@ class TFilamentMonitor : public FilamentMonitorBase {
           }
         #endif
 
-        if (ran_out) {
+        filament_insert = (!ran_out && !sensor.get_runout_state(extruder));
+
+        if ((printingIsActive() || did_pause_print) && !filament_ran_out && ran_out) {
           filament_ran_out = true;
           event_filament_runout(extruder);
           planner.synchronize();
@@ -284,6 +287,8 @@ class FilamentSensorBase {
       }
 
       static void run() { poll_motion_sensor(); }
+
+      static bool get_runout_state(const uint8_t extruder) { return false; }
   };
 
 #else
@@ -297,9 +302,8 @@ class FilamentSensorBase {
       static bool poll_runout_state(const uint8_t extruder) {
         const uint8_t runout_states = poll_runout_states();
         #if MULTI_FILAMENT_SENSOR
-          if ( !TERN0(DUAL_X_CARRIAGE, idex_is_duplicating())
-            && !TERN0(MULTI_NOZZLE_DUPLICATION, extruder_duplication_enabled)
-          ) return TEST(runout_states, extruder); // A specific extruder ran out
+          if (!TERN0(MULTI_NOZZLE_DUPLICATION, extruder_duplication_enabled))
+            return TEST(runout_states, extruder); // A specific extruder ran out
         #else
           UNUSED(extruder);
         #endif
@@ -321,6 +325,15 @@ class FilamentSensorBase {
             }
           #endif
         }
+      }
+
+      static bool get_runout_state(const uint8_t extruder) {
+        bool state = false;
+        if (TERN0(DUAL_X_CARRIAGE, idex_is_duplicating())) {
+          for (uint8_t s = 0; s < NUM_RUNOUT_SENSORS; ++s) state |= poll_runout_state(s);
+        } else
+          state = poll_runout_state(extruder);
+        return state;
       }
   };
 
@@ -368,13 +381,21 @@ class FilamentSensorBase {
       }
 
       static void block_completed(const block_t * const b) {
-        if (b->steps.x || b->steps.y || b->steps.z || did_pause_print) { // Allow pause purge move to re-trigger runout state
-          // Only trigger on extrusion with XYZ movement to allow filament change and retract/recover.
-          const uint8_t e = b->extruder;
-          const int32_t steps = b->steps.e;
-          runout_mm_countdown[e] -= (TEST(b->direction_bits, E_AXIS) ? -steps : steps) * planner.mm_per_step[E_AXIS_N(e)];
-        }
+        const int32_t esteps = b->steps.e;
+        if (!esteps) return;
+
+        // No calculation unless paused or printing
+        if (!(did_pause_print || printingIsActive())) return;
+
+        // No need to ignore retract/unretract movement since they complement each other
+        const uint8_t e = b->extruder;
+        const float mm = (TEST(b->direction_bits, E_AXIS) ? -esteps : esteps) * planner.mm_per_step[E_AXIS_N(e)];
+        if (TERN0(DUAL_X_CARRIAGE, idex_is_duplicating())) {
+          for (uint8_t s = 0; s < NUM_RUNOUT_SENSORS; ++s) runout_mm_countdown[s] -= mm;
+        } else
+          runout_mm_countdown[e] -= mm;
       }
+
   };
 
 #else // !HAS_FILAMENT_RUNOUT_DISTANCE

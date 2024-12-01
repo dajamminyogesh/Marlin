@@ -28,17 +28,37 @@
 
 #if ENABLED(POWER_LOSS_RECOVERY)
 
+#if ENABLED(RECOVERY_USE_EEPROM)
+  #include "../HAL/shared/eeprom_api.h"
+#endif
+
+#if ENABLED(CANFILE)
+  #include "../canOpen/canFile/canFile.h"
+#endif
+
 #include "powerloss.h"
 #include "../core/macros.h"
 
 bool PrintJobRecovery::enabled; // Initialized by settings.load()
 
-MediaFile PrintJobRecovery::file;
-job_recovery_info_t PrintJobRecovery::info;
-const char PrintJobRecovery::filename[5] = "/PLR";
+  #if ENABLED(SDSUPPORT)
+    MediaFile PrintJobRecovery::file;
+    const char PrintJobRecovery::filename[5] = "/PLR";
+    uint32_t PrintJobRecovery::cmd_sdpos, // = 0
+             PrintJobRecovery::sdpos[BUFSIZE];
+  #elif ENABLED(CANFILE)
+    uint32_t PrintJobRecovery::cmd_canfilepos, // = 0
+             PrintJobRecovery::canfilepos[BUFSIZE];
+    bool PrintJobRecovery::state = false;
+  #endif
+
 uint8_t PrintJobRecovery::queue_index_r;
-uint32_t PrintJobRecovery::cmd_sdpos, // = 0
-         PrintJobRecovery::sdpos[BUFSIZE];
+job_recovery_info_t PrintJobRecovery::info;
+bool PrintJobRecovery::recoveryPrepare;
+
+#if ENABLED(BACKUP_POWER_SUPPLY)
+static bool lock = false;
+#endif
 
 #if HAS_DWIN_E3V2_BASIC
   bool PrintJobRecovery::dwin_flag; // = false
@@ -53,6 +73,10 @@ uint32_t PrintJobRecovery::cmd_sdpos, // = 0
 #include "../module/printcounter.h"
 #include "../module/temperature.h"
 #include "../core/serial.h"
+
+#if ENABLED(EXTENSIBLE_UI)
+  #include "../lcd/extui/ui_api.h"
+#endif
 
 #if HOMING_Z_WITH_PROBE
   #include "../module/probe.h"
@@ -80,7 +104,11 @@ PrintJobRecovery recovery;
 // Allow power-loss recovery to be aborted
 #define PLR_CAN_ABORT
 #if ENABLED(PLR_CAN_ABORT)
-  #define PROCESS_SUBCOMMANDS_NOW(cmd) do { if (card.flag.abort_sd_printing) return; gcode.process_subcommands_now(cmd); }while(0)
+  #if ENABLED(SDSUPPORT)
+    #define PROCESS_SUBCOMMANDS_NOW(cmd) do { if (card.flag.abort_sd_printing) return; gcode.process_subcommands_now(cmd); }while(0)
+  #elif ENABLED(CANFILE)
+    #define PROCESS_SUBCOMMANDS_NOW(cmd) do { if (canFile.isAborting()) return; gcode.process_subcommands_now(cmd); }while(0)
+  #endif
 #else
   #define PROCESS_SUBCOMMANDS_NOW(cmd) gcode.process_subcommands_now(cmd)
 #endif
@@ -91,12 +119,28 @@ PrintJobRecovery recovery;
 void PrintJobRecovery::init() { memset(&info, 0, sizeof(info)); }
 
 /**
+ * 记录当前位置作为存储位置
+*/
+void PrintJobRecovery::sync_curPos() { info.current_position = current_position.asLogical(); }
+
+/**
  * Enable or disable then call changed()
  */
 void PrintJobRecovery::enable(const bool onoff) {
   enabled = onoff;
   changed();
 }
+
+  #if ENABLED(CANFILE)
+void PrintJobRecovery::handleCanfile(const bool onoff) {
+  if (!state) return;
+
+  if (onoff)
+    queue.inject(F("M1000"));
+  else
+    queue.inject(F("M1000C"));
+}
+  #endif  // CANFILE
 
 /**
  * The enabled state was changed:
@@ -106,7 +150,7 @@ void PrintJobRecovery::enable(const bool onoff) {
 void PrintJobRecovery::changed() {
   if (!enabled)
     purge();
-  else if (IS_SD_PRINTING())
+  else if (TERN(CANFILE, IS_CANFILE_PRINTING(), IS_SD_PRINTING()))
     save(true);
   TERN_(EXTENSIBLE_UI, ExtUI::onSetPowerLoss(enabled));
 }
@@ -117,15 +161,16 @@ void PrintJobRecovery::changed() {
  * If a saved state exists send 'M1000 S' to initiate job recovery.
  */
 bool PrintJobRecovery::check() {
-  //if (!card.isMounted()) card.mount();
   bool success = false;
-  if (card.isMounted()) {
+  if (TERN(RECOVERY_USE_EEPROM, true, TERN(SDSUPPORT, card.isMounted(), true))) {  
     load();
     success = valid();
     if (!success)
       cancel();
-    else
+    else {
+      wait_for_user = false; // 取消等待用户状态以处理命令
       queue.inject(F("M1000S"));
+    }
   }
   return success;
 }
@@ -134,29 +179,57 @@ bool PrintJobRecovery::check() {
  * Delete the recovery file and clear the recovery data
  */
 void PrintJobRecovery::purge() {
+  #if ENABLED(CANFILE)
+    state = false;
+  #endif
+  #if ENABLED(RECOVERY_USE_EEPROM)
+    if (info.valid_head) {
+      TERN_(BACKUP_POWER_SUPPLY, lock = false);
+      if (persistentStore.access_start()) {
+        info.valid_head = info.valid_foot = 0;
+        persistentStore.write_data(PLR_EEPROM_OFFSET, (uint8_t *)&info, sizeof(info));
+        persistentStore.access_finish();
+      }
+      init();
+    }
+  #else
   init();
-  card.removeJobRecoveryFile();
+    #if ENABLED(SDSUPPORT)
+      card.removeJobRecoveryFile();
+    #endif
+  #endif
 }
 
 /**
  * Load the recovery data, if it exists
  */
 void PrintJobRecovery::load() {
-  if (exists()) {
-    open(true);
-    (void)file.read(&info, sizeof(info));
-    close();
+  #if ENABLED(RECOVERY_USE_EEPROM)
+  if (persistentStore.access_start()) {
+    persistentStore.read_data(PLR_EEPROM_OFFSET, (uint8_t *)&info, sizeof(info));
+    persistentStore.access_finish();
   }
+  #elif
+    #if ENABLED(SDSUPPORT)
+      if (exists()) {
+        open(true);
+        (void)file.read(&info, sizeof(info));
+        close();
+      }
+    #endif
+  #endif
   debug(F("Load"));
 }
 
 /**
  * Set info fields that won't change
  */
+#if ENABLED(SDSUPPORT)
 void PrintJobRecovery::prepare() {
   card.getAbsFilenameInCWD(info.sd_filename);  // SD filename
-  cmd_sdpos = 0;
+  cmd_sdpos = card.getIndex();
 }
+#endif
 
 /**
  * Save the current machine state to the power-loss recovery file
@@ -200,6 +273,12 @@ void PrintJobRecovery::save(const bool force/*=false*/, const float zraise/*=POW
     info.feedrate = uint16_t(MMS_TO_MMM(feedrate_mm_s));
     info.zraise = zraise;
     info.flag.raised = raised;                      // Was Z raised before power-off?
+
+    #if ENABLED(DUAL_X_CARRIAGE)
+      info.dual_x_mode = dual_x_carriage_mode;
+      info.dual_x_offset = duplicate_extruder_x_offset;
+      info.dual_temp_offset = duplicate_extruder_temp_offset;
+    #endif
 
     TERN_(GCODE_REPEAT_MARKERS, info.stored_repeat = repeat);
     TERN_(HAS_HOME_OFFSET, info.home_offset = home_offset);
@@ -245,7 +324,9 @@ void PrintJobRecovery::save(const bool force/*=false*/, const float zraise/*=POW
     info.flag.dryrun = !!(marlin_debug_flags & MARLIN_DEBUG_DRYRUN);
     info.flag.allow_cold_extrusion = TERN0(PREVENT_COLD_EXTRUSION, thermalManager.allow_cold_extrude);
 
+    #if DISABLED(BACKUP_POWER_SUPPLY)
     write();
+    #endif
   }
 }
 
@@ -254,7 +335,13 @@ void PrintJobRecovery::save(const bool force/*=false*/, const float zraise/*=POW
   #if ENABLED(BACKUP_POWER_SUPPLY)
 
     void PrintJobRecovery::retract_and_lift(const_float_t zraise) {
+      planner.cleaning_buffer_counter = 0;
+
+      gcode.process_subcommands_now(F("M18 XY"));
+
       #if POWER_LOSS_RETRACT_LEN || POWER_LOSS_ZRAISE
+
+        REMEMBER(mode, GcodeSuite::axis_relative);
 
         gcode.set_relative_mode(true);  // Use relative coordinates
 
@@ -277,6 +364,8 @@ void PrintJobRecovery::save(const bool force/*=false*/, const float zraise/*=POW
         //gcode.axis_relative = info.axis_relative;
         planner.synchronize();
       #endif
+      
+      gcode.process_subcommands_now(F("M18 E"));
     }
 
   #endif
@@ -284,6 +373,29 @@ void PrintJobRecovery::save(const bool force/*=false*/, const float zraise/*=POW
 #endif // POWER_LOSS_PIN
 
 #if PIN_EXISTS(POWER_LOSS) || ENABLED(DEBUG_POWER_LOSS_RECOVERY)
+
+  // 意外关机的状态逻辑
+  void PrintJobRecovery::outageAction() {
+    if (!TERN(CANFILE, IS_CANFILE_PRINTING(), IS_SD_PRINTING())) {  // 非打印状态下
+      // 暂停状态下
+      //   保存当前打印信息
+      //   取消状态等待
+      if (TERN(CANFILE, IS_CANFILE_PAUSED(), IS_SD_PAUSED())) {
+        write();
+        wait_for_heatup = wait_for_user = false;
+
+        #if ENABLED(SDSUPPORT)
+          card.abortFilePrintSoon();
+        #elif ENABLED(CANFILE)
+          canFile.taskAborting();
+        #endif
+      }
+      // 直接关机
+      TERN(POWER_OFF_WAIT_FOR_COOLDOWN, powerOffOnCooldown(), kill());
+    } else {  // 打印状态下执行正常降板关机
+      _outage();
+    }
+  }
 
   /**
    * An outage was detected by a sensor pin.
@@ -295,7 +407,6 @@ void PrintJobRecovery::save(const bool force/*=false*/, const float zraise/*=POW
    */
   void PrintJobRecovery::_outage(TERN_(DEBUG_POWER_LOSS_RECOVERY, const bool simulated/*=false*/)) {
     #if ENABLED(BACKUP_POWER_SUPPLY)
-      static bool lock = false;
       if (lock) return; // No re-entrance from idle() during retract_and_lift()
       lock = true;
     #endif
@@ -309,28 +420,37 @@ void PrintJobRecovery::save(const bool force/*=false*/, const float zraise/*=POW
 
     // Save the current position, distance that Z was (or should be) raised,
     // and a flag whether the raise was already done here.
-    if (IS_SD_PRINTING()) save(true, zraise, ENABLED(BACKUP_POWER_SUPPLY));
+    if (TERN(CANFILE, IS_CANFILE_PRINTING(),IS_SD_PRINTING())) save(true, zraise, ENABLED(BACKUP_POWER_SUPPLY));
 
     // Tell the LCD about the outage, even though it is about to die
     TERN_(EXTENSIBLE_UI, ExtUI::onPowerLoss());
 
+    #if ENABLED(CANFILE)
+      canFile.taskAborting();
+    #endif
     // Disable all heaters to reduce power loss
     thermalManager.disable_all_heaters();
 
     #if ENABLED(BACKUP_POWER_SUPPLY)
       // Do a hard-stop of the steppers (with possibly a loud thud)
       quickstop_stepper();
+      sync_curPos();
       // With backup power a retract and raise can be done now
       retract_and_lift(zraise);
+      write();
     #endif
 
     if (TERN0(DEBUG_POWER_LOSS_RECOVERY, simulated)) {
-      card.fileHasFinished();
+      #if ENABLED(SDSUPPORT)
+        card.fileHasFinished();
+      #elif ENABLED(CANFILE)
+        canFile.taskFinished();
+      #endif
       current_position.reset();
       sync_plan_position();
     }
     else
-      kill(GET_TEXT_F(MSG_OUTAGE_RECOVERY));
+      TERN(POWER_OFF_WAIT_FOR_COOLDOWN, powerOffOnCooldown(), kill(GET_TEXT_F(MSG_OUTAGE_RECOVERY)));
   }
 
 #endif // POWER_LOSS_PIN || DEBUG_POWER_LOSS_RECOVERY
@@ -342,11 +462,18 @@ void PrintJobRecovery::write() {
 
   debug(F("Write"));
 
+  #if ENABLED(RECOVERY_USE_EEPROM)
+  if (persistentStore.access_start()) {
+    persistentStore.write_data(PLR_EEPROM_OFFSET, (const uint8_t *)&info, sizeof(info));
+    persistentStore.access_finish();
+  }
+  #elif
   open(false);
   file.seekSet(0);
   const int16_t ret = file.write(&info, sizeof(info));
   if (ret == -1) DEBUG_ECHOLNPGM("Power-loss file write failed.");
   if (!file.close()) DEBUG_ECHOLNPGM("Power-loss file close failed.");
+  #endif
 }
 
 /**
@@ -355,8 +482,19 @@ void PrintJobRecovery::write() {
 void PrintJobRecovery::resume() {
 
   char cmd[MAX_CMD_SIZE+16], str_1[16], str_2[16];
+  const xyze_pos_t resume_axisPos = info.current_position;
 
-  const uint32_t resume_sdpos = info.sdpos; // Get here before the stepper ISR overwrites it
+  #if ENABLED(SDSUPPORT)
+    const uint32_t resume_sdpos = info.sdpos; // Get here before the stepper ISR overwrites it
+    sync_sdpos();
+  #elif ENABLED(CANFILE)
+    state = false;
+    const uint32_t resume_canfilepos = info.canfilepos;
+    sync_canfilepos();
+  #endif
+
+  TERN_(BACKUP_POWER_SUPPLY, lock = false);
+  gcode.set_relative_mode(false);  // Use absolute coordinates
 
   // Apply the dry-run flag if enabled
   if (info.flag.dryrun) marlin_debug_flags |= MARLIN_DEBUG_DRYRUN;
@@ -375,6 +513,12 @@ void PrintJobRecovery::resume() {
   // Restore cold extrusion permission
   TERN_(PREVENT_COLD_EXTRUSION, thermalManager.allow_cold_extrude = info.flag.allow_cold_extrusion);
 
+  recoveryPrepare = true;
+  #if ENABLED(CANFILE)
+    print_job_timer.resume(info.print_job_elapsed);
+  #endif
+  print_job_timer.start();
+
   #if HAS_LEVELING
     // Make sure leveling is off before any G92 and G28
     PROCESS_SUBCOMMANDS_NOW(F("M420S0"));
@@ -390,22 +534,22 @@ void PrintJobRecovery::resume() {
   #endif
 
   // Heat hotend enough to soften material
-  #if HAS_HOTEND
-    HOTEND_LOOP() {
-      const celsius_t et = _MAX(info.target_temperature[e], 180);
-      if (et) {
-        #if HAS_MULTI_HOTEND
-          sprintf_P(cmd, PSTR("T%iS"), e);
-          PROCESS_SUBCOMMANDS_NOW(cmd);
-        #endif
-        sprintf_P(cmd, PSTR("M109S%i"), et);
-        PROCESS_SUBCOMMANDS_NOW(cmd);
-      }
-    }
-  #endif
+  // #if HAS_HOTEND
+  //   HOTEND_LOOP() {
+  //     const celsius_t et = _MAX(info.target_temperature[e], 180);
+  //     if (et) {
+  //       #if HAS_MULTI_HOTEND
+  //         sprintf_P(cmd, PSTR("T%iS"), e);
+  //         PROCESS_SUBCOMMANDS_NOW(cmd);
+  //       #endif
+  //       sprintf_P(cmd, PSTR("M109S%i"), et);
+  //       PROCESS_SUBCOMMANDS_NOW(cmd);
+  //     }
+  //   }
+  // #endif
 
   // Interpret the saved Z according to flags
-  const float z_print = info.current_position.z,
+  const float z_print = resume_axisPos.z,
               z_raised = z_print + info.zraise;
 
   //
@@ -462,6 +606,11 @@ void PrintJobRecovery::resume() {
   // Mark all axes as having been homed (no effect on current_position)
   set_all_homed();
 
+  #ifdef MANUAL_X_HOME_POS
+    current_position.x += MANUAL_X_HOME_POS;
+    line_to_current_position(NOZZLE_PARK_XY_FEEDRATE);
+  #endif
+
   #if HAS_LEVELING
     // Restore Z fade and possibly re-enable bed leveling compensation.
     // Leveling may already be enabled due to the ENABLE_LEVELING_AFTER_G28 option.
@@ -481,6 +630,24 @@ void PrintJobRecovery::resume() {
     z_now = z_raised;
     sprintf_P(cmd, PSTR("G1Z%sF600"), dtostrf(z_now, 1, 3, str_1));
     PROCESS_SUBCOMMANDS_NOW(cmd);
+  #endif
+
+  #if ENABLED(DUAL_X_CARRIAGE)
+    const DualXMode mode = info.dual_x_mode;
+    const float x_offset = info.dual_x_offset;
+    const celsius_t temp_offset = info.dual_temp_offset;
+
+    if (x_offset != DEFAULT_DUPLICATION_X_OFFSET || temp_offset) {
+      sprintf_P(cmd, PSTR("M605 S2 X%s R%i"), dtostrf(x_offset, 1, 3, str_1), temp_offset);
+      PROCESS_SUBCOMMANDS_NOW(cmd);
+    } else if (mode == DXC_DUPLICATION_MODE) {
+      sprintf_P(cmd, PSTR("M605 S2"));
+      PROCESS_SUBCOMMANDS_NOW(cmd);
+    }
+    if (mode == DXC_MIRRORED_MODE) {
+      sprintf_P(cmd, PSTR("M605 S3"));
+      PROCESS_SUBCOMMANDS_NOW(cmd);
+    }
   #endif
 
   // Recover volumetric extrusion state
@@ -566,8 +733,8 @@ void PrintJobRecovery::resume() {
 
   // Move back over to the saved XY
   sprintf_P(cmd, PSTR("G1X%sY%sF3000"),
-    dtostrf(info.current_position.x, 1, 3, str_1),
-    dtostrf(info.current_position.y, 1, 3, str_2)
+    dtostrf(resume_axisPos.x, 1, 3, str_1),
+    dtostrf(resume_axisPos.y, 1, 3, str_2)
   );
   PROCESS_SUBCOMMANDS_NOW(cmd);
 
@@ -580,7 +747,7 @@ void PrintJobRecovery::resume() {
   PROCESS_SUBCOMMANDS_NOW(cmd);
 
   // Restore E position with G92.9
-  sprintf_P(cmd, PSTR("G92.9E%s"), dtostrf(info.current_position.e, 1, 3, str_1));
+  sprintf_P(cmd, PSTR("G92.9E%s"), dtostrf(resume_axisPos.e, 1, 3, str_1));
   PROCESS_SUBCOMMANDS_NOW(cmd);
 
   TERN_(GCODE_REPEAT_MARKERS, repeat = info.stored_repeat);
@@ -596,11 +763,15 @@ void PrintJobRecovery::resume() {
   // Continue to apply PLR when a file is resumed!
   enable(true);
 
-  // Resume the SD file from the last position
-  sprintf_P(cmd, M23_STR, &info.sd_filename[0]);
-  PROCESS_SUBCOMMANDS_NOW(cmd);
-  sprintf_P(cmd, PSTR("M24S%ldT%ld"), resume_sdpos, info.print_job_elapsed);
-  PROCESS_SUBCOMMANDS_NOW(cmd);
+  planner.synchronize();
+
+  // Resume the file from the last position
+  #if ENABLED(SDSUPPORT)
+    sprintf_P(cmd, M23_STR, &info.sd_filename[0]);
+    PROCESS_SUBCOMMANDS_NOW(cmd);
+    sprintf_P(cmd, PSTR("M24S%ldT%ld"), resume_sdpos, info.print_job_elapsed);
+    PROCESS_SUBCOMMANDS_NOW(cmd); 
+  #endif
 }
 
 #if ENABLED(DEBUG_POWER_LOSS_RECOVERY)
@@ -624,7 +795,11 @@ void PrintJobRecovery::resume() {
         #if ENABLED(GCODE_REPEAT_MARKERS)
           DEBUG_ECHOLNPGM("repeat index: ", info.stored_repeat.index);
           for (uint8_t i = 0; i < info.stored_repeat.index; ++i)
-            DEBUG_ECHOLNPGM("..... sdpos: ", info.stored_repeat.marker.sdpos, " count: ", info.stored_repeat.marker.counter);
+            #if ENABLED(SDSUPPORT)
+              DEBUG_ECHOLNPGM("..... sdpos: ", info.stored_repeat.marker.sdpos, " count: ", info.stored_repeat.marker.counter);
+            #elif ENABLED(CANFILE)
+              DEBUG_ECHOLNPGM("..... canfilepos: ", info.stored_repeat.marker.canfilepos" count: ", info.stored_repeat.marker.counter);
+            #endif
         #endif
 
         #if HAS_HOME_OFFSET
@@ -650,9 +825,11 @@ void PrintJobRecovery::resume() {
         #endif
 
         #if DISABLED(NO_VOLUMETRICS)
-          DEBUG_ECHOPGM("filament_size:");
-          EXTRUDER_LOOP() DEBUG_ECHOLNPGM(" ", info.filament_size[e]);
-          DEBUG_EOL();
+          #if ENABLED(SDSUPPORT)
+            DEBUG_ECHOPGM("filament_size:");
+            EXTRUDER_LOOP() DEBUG_ECHOLNPGM(" ", info.filament_size[e]);
+            DEBUG_EOL();
+          #endif
         #endif
 
         #if HAS_HOTEND
@@ -696,8 +873,13 @@ void PrintJobRecovery::resume() {
           DEBUG_ECHOLNPGM("gradient: ", info.gradient.enabled ? "ON" : "OFF");
         #endif
 
-        DEBUG_ECHOLNPGM("sd_filename: ", info.sd_filename);
-        DEBUG_ECHOLNPGM("sdpos: ", info.sdpos);
+        #if ENABLED(SDSUPPORT)
+          DEBUG_ECHOLNPGM("sd_filename: ", info.sd_filename);
+          DEBUG_ECHOLNPGM("sdpos: ", info.sdpos);
+        #elif ENABLED(CANFILE)
+          DEBUG_ECHOLNPGM("canfilepos: ", info.canfilepos);
+        #endif
+
         DEBUG_ECHOLNPGM("print_job_elapsed: ", info.print_job_elapsed);
 
         DEBUG_ECHOPGM("axis_relative:");

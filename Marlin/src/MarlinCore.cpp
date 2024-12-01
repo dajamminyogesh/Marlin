@@ -57,10 +57,15 @@
 
 #include "feature/pause.h"
 #include "sd/cardreader.h"
+#include "canOpen/canFile/canFile.h"
 
 #include "lcd/marlinui.h"
 #if HAS_TOUCH_BUTTONS
   #include "lcd/touch/touch_buttons.h"
+#endif
+
+#if ENABLED(EXTENSIBLE_UI)
+  #include "lcd/extui/ui_api.h"
 #endif
 
 #if HAS_TFT_LVGL_UI
@@ -79,6 +84,10 @@
   #elif ENABLED(DWIN_CREALITY_LCD_JYERSUI)
     #include "lcd/e3v2/jyersui/dwin.h"
   #endif
+#endif
+
+#if ENABLED(CANOPEN_SUPPORT)
+  #include "canOpen/canOpen.h"
 #endif
 
 #if HAS_ETHERNET
@@ -159,6 +168,10 @@
 
 #if HAS_MEDIA
   CardReader card;
+#endif
+
+#if ENABLED(CANFILE)
+  CANFile canFile;
 #endif
 
 #if ENABLED(G38_PROBE_TARGET)
@@ -256,12 +269,24 @@
   #include "tests/marlin_tests.h"
 #endif
 
+#if ENABLED(PRINTER_STATUS_LEDS)
+  #include "feature/leds/printer_status_leds.h"
+#endif
+
+#if ENABLED(ANNEALING_SUPPORT)
+  #include "feature/annealing.h"
+#endif
+
+#if ENABLED(CREATBOT_WIFI_SUPPORT)
+  #include "feature/wifi/WiFiSocket.h"
+#endif
+
 PGMSTR(M112_KILL_STR, "M112 Shutdown");
 
 MarlinState marlin_state = MF_INITIALIZING;
 
 // For M109 and M190, this flag may be cleared (by M108) to exit the wait loop
-bool wait_for_heatup = true;
+bool wait_for_heatup = false;
 
 // For M0/M1, this flag may be cleared (by M108) to exit the wait-for-user loop
 #if HAS_RESUME_CONTINUE
@@ -325,6 +350,22 @@ bool pin_is_protected(const pin_t pin) {
 
 #pragma GCC diagnostic pop
 
+/**
+ * 开机提示音
+ */
+#if HAS_SOUND
+  inline void startupTone() {
+    uint8_t i = 10;
+    do {
+      BUZZ(17, 659);  // mi
+      BUZZ(3, 0);
+    } while (--i);
+    BUZZ(250, 0);
+    BUZZ(200, 659);  // mi
+    BUZZDONE(1000);
+  }
+#endif
+
 bool printer_busy() {
   return planner.movesplanned() || printingIsActive();
 }
@@ -332,7 +373,12 @@ bool printer_busy() {
 /**
  * A Print Job exists when the timer is running or SD is printing
  */
-bool printJobOngoing() { return print_job_timer.isRunning() || IS_SD_PRINTING(); }
+bool printJobOngoing() {
+  return print_job_timer.isRunning() ||             // 计时器工作
+         (queue.get_current_line_number() != 0) ||  // 串口打印行号不为0
+         IS_SD_PRINTING() ||                        // SD卡打印中
+         IS_CANFILE_PRINTING();                     // CanFile打印中
+}
 
 /**
  * Printing is active when a job is underway but not paused
@@ -343,7 +389,10 @@ bool printingIsActive() { return !did_pause_print && printJobOngoing(); }
  * Printing is paused according to SD or host indicators
  */
 bool printingIsPaused() {
-  return did_pause_print || print_job_timer.isPaused() || IS_SD_PAUSED();
+  return did_pause_print ||             // 暂停标志位
+         print_job_timer.isPaused() ||  // 计时器暂停
+         IS_SD_PAUSED() ||              // SD卡暂停中
+         IS_CANFILE_PAUSED();           // CanFile暂停中
 }
 
 void startOrResumeJob() {
@@ -373,7 +422,7 @@ void startOrResumeJob() {
 
     wait_for_heatup = false;
 
-    TERN_(POWER_LOSS_RECOVERY, recovery.purge());
+    TERN_(DUAL_X_CARRIAGE, reset_idex_mode());
 
     #ifdef EVENT_GCODE_SD_ABORT
       queue.inject(F(EVENT_GCODE_SD_ABORT));
@@ -391,6 +440,65 @@ void startOrResumeJob() {
   }
 
 #endif // HAS_MEDIA
+
+#if ENABLED(CANFILE)
+  inline void abortCanFilePrinting() {
+    canFile.taskAborted();
+    print_job_timer.abort();
+
+    queue.clear();
+    quickstop_stepper();
+
+    thermalManager.cooldown();
+    wait_for_heatup = false;
+
+    stepper.disable_all_steppers();
+
+    TERN_(DUAL_X_CARRIAGE, reset_idex_mode());
+  }
+
+  inline void finishCanFilePrinting() {
+    if (queue.enqueue_one(F("M1001"))) {
+      canFile.taskFinished();
+    }
+  }
+#endif  // CANFILE
+
+#if ENABLED(POWER_OFF_WAIT_FOR_COOLDOWN)
+  /**
+   * 触发等待冷却关机
+   */
+  void powerOffOnCooldown() {
+    if (powerManager.power_off_on_cooldown) return;                    // 状态标志防止递归进入
+    quickstop_stepper();                                               // 中止电机动作
+    queue.clear();                                                     // 清空命令队列
+    thermalManager.disable_all_heaters();                              // 关闭所有加热单元
+    TERN_(SDSUPPORT, card.abortFilePrintSoon());                       // 中止存储器打印任务
+    TERN_(CANFILE, canFile.taskAborting());                            // 中止CANFile打印任务
+    print_job_timer.abort();                                           // 中止打印计数器
+    TERN_(HAS_FILAMENT_SENSOR, runout.reset());                        // 重置耗材检测状态
+    TERN_(EXTENSIBLE_UI, ExtUI::onPrinterPoweroff());                  // 屏幕设置对应提示
+    powerManager.setPowerOffOnCooldown(true);                          // 设置等待状态
+  }
+#endif
+
+  /**
+   * 关机按钮触发动作
+   * 1. 优先使用断电续打功能
+   * 2. 等待冷却关机功能
+   */
+  inline void shutdownAction() {
+  #if ENABLED(POWER_LOSS_RECOVERY) && PIN_EXISTS(POWER_LOSS)
+    recovery.outageAction();
+  #else
+    TERN(POWER_OFF_WAIT_FOR_COOLDOWN, powerOffOnCooldown(), kill());
+  #endif
+  }
+
+// Linux屏幕的自动关机
+#if ENABLED(CREATBOT_LINUX_LCD)
+void LCDCtrlShutdown() { shutdownAction(); }
+#endif
 
 /**
  * Minimal management of Marlin's core activities:
@@ -477,16 +585,22 @@ inline void manage_inactivity(const bool no_stepper_sleep=false) {
     if (kill_state())
       killCount++;
     else if (killCount > 0)
-      killCount--;
+      if (--killCount == KILL_DELAY) killCount--;
 
     // Exceeded threshold and we can confirm that it was not accidental
     // KILL the machine
     // ----------------------------------------------------------------
     if (killCount >= KILL_DELAY) {
-      SERIAL_ERROR_START();
-      SERIAL_ECHOPGM(STR_KILL_PRE);
-      SERIAL_ECHOLNPGM(STR_KILL_BUTTON);
-      kill();
+      if (killCount > 0x20000) {
+        TERN_(HAS_BEEPER, buzzer.on());
+        SERIAL_ERROR_START();
+        SERIAL_ECHOPGM(STR_KILL_PRE);
+        SERIAL_ECHOLNPGM(STR_KILL_BUTTON);
+        TERN_(PSU_CONTROL, powerManager.power_off());
+        TERN_(HAS_SUICIDE, suicide());
+        kill();
+      }
+      if (killCount == KILL_DELAY) shutdownAction();
     }
   #endif
 
@@ -659,9 +773,9 @@ inline void manage_inactivity(const bool no_stepper_sleep=false) {
   TERN_(EASYTHREED_UI, easythreed_ui.run());
 
   TERN_(USE_CONTROLLER_FAN, controllerFan.update()); // Check if fan should be turned on to cool stepper drivers down
-
+#if DISABLED(CREATBOT_LINUX_LCD)
   TERN_(AUTO_POWER_CONTROL, powerManager.check(!ui.on_status_screen() || printJobOngoing() || printingIsPaused()));
-
+#endif
   TERN_(HOTEND_IDLE_TIMEOUT, hotend_idle.check());
 
   #if ENABLED(EXTRUDER_RUNOUT_PREVENT)
@@ -788,6 +902,10 @@ void idle(const bool no_stepper_sleep/*=false*/) {
   // Bed Distance Sensor task
   TERN_(BD_SENSOR, bdl.process());
 
+  #if ENABLED(CREATBOT_WIFI_SUPPORT) 
+    myWifi.run();
+  #endif
+
   // Core Marlin activities
   manage_inactivity(no_stepper_sleep);
 
@@ -817,7 +935,7 @@ void idle(const bool no_stepper_sleep/*=false*/) {
 
   // Handle Power-Loss Recovery
   #if ENABLED(POWER_LOSS_RECOVERY) && PIN_EXISTS(POWER_LOSS)
-    if (IS_SD_PRINTING()) recovery.outage();
+    recovery.outage();
   #endif
 
   // Run StallGuard endstop checks
@@ -838,8 +956,16 @@ void idle(const bool no_stepper_sleep/*=false*/) {
   // Update the Print Job Timer state
   TERN_(PRINTCOUNTER, print_job_timer.tick());
 
+  // Update the Printer Work Status LED
+  TERN_(PRINTER_STATUS_LEDS, printerStatusLEDs.update());
+
+    // Handle Annealing after the Printer Work Done
+  TERN_(ANNEALING_SUPPORT, printDoneAnnealing.task());
+
   // Update the Beeper queue
   TERN_(HAS_BEEPER, buzzer.tick());
+
+  TERN_(CANOPEN_SUPPORT, updateNode());
 
   // Handle UI input / draw events
   TERN(DWIN_CREALITY_LCD, DWIN_Update(), ui.update());
@@ -943,6 +1069,8 @@ void minkill(const bool steppers_off/*=false*/) {
     // Wait for both KILL and ENC to be released
     while (TERN0(HAS_KILL, kill_state()) || TERN0(SOFT_RESET_ON_KILL, ui.button_pressed()))
       hal.watchdog_refresh();
+
+    DELAY_US(2000);  // 防止临界值抖动触发
 
     // Wait for either KILL or ENC to be pressed again
     while (TERN1(HAS_KILL, !kill_state()) && TERN1(SOFT_RESET_ON_KILL, !ui.button_pressed()))
@@ -1163,7 +1291,7 @@ void setup() {
   #define SETUP_RUN(C) do{ SETUP_LOG(STRINGIFY(C)); C; }while(0)
 
   MYSERIAL1.begin(BAUDRATE);
-  millis_t serial_connect_timeout = millis() + 1000UL;
+  millis_t serial_connect_timeout = millis() + 5000UL;
   while (!MYSERIAL1.connected() && PENDING(millis(), serial_connect_timeout)) { /*nada*/ }
 
   #if HAS_MULTI_SERIAL && !HAS_ETHERNET
@@ -1319,6 +1447,14 @@ void setup() {
   // (because EEPROM code calls the UI).
 
   SETUP_RUN(ui.init());
+
+  #if ENABLED(CANOPEN_SUPPORT)
+    SETUP_RUN(initNode());
+  #endif
+
+  #if ENABLED(CREATBOT_WIFI_SUPPORT) 
+    SETUP_RUN(myWifi.init());
+  #endif
 
   #if PIN_EXISTS(SAFE_POWER)
     #if HAS_DRIVER_SAFE_POWER_PROTECT
@@ -1551,7 +1687,7 @@ void setup() {
       lower_nozzle(0);
       raise_nozzle(1);
     #else
-      move_nozzle_servo(0);
+      align_nozzle_servo();
     #endif
   #endif
 
@@ -1647,7 +1783,13 @@ void setup() {
     SETUP_RUN(bdl.init(I2C_BD_SDA_PIN, I2C_BD_SCL_PIN, I2C_BD_DELAY));
   #endif
 
+  #if HAS_SOUND
+    SETUP_RUN(startupTone());
+  #endif
+
   marlin_state = MF_RUNNING;
+
+  TERN_(POWER_LOSS_RECOVERY, TERN_(CANFILE, recovery.check()));
 
   SETUP_LOG("setup() completed.");
 
@@ -1674,6 +1816,11 @@ void loop() {
     #if HAS_MEDIA
       if (card.flag.abort_sd_printing) abortSDPrinting();
       if (marlin_state == MF_SD_COMPLETE) finishSDPrinting();
+    #endif
+
+    #if ENABLED(CANFILE)
+      if(canFile.isAborting()) abortCanFilePrinting();
+      if(canFile.isFinishing()) finishCanFilePrinting();
     #endif
 
     queue.advance();

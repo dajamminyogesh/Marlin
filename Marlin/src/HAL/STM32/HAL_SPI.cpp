@@ -169,7 +169,7 @@ static SPISettings spiConfig;
     SPI.setMOSI(SD_MOSI_PIN);
     SPI.setSCLK(SD_SCK_PIN);
 
-    SPI.begin();
+    SPI.beginTransaction(spiConfig);
   }
 
   /**

@@ -50,8 +50,8 @@ void GcodeSuite::M413() {
     if (parser.seen_test('D')) recovery.debug(F("M413"));
     if (parser.seen_test('O')) recovery._outage(true);
     if (parser.seen_test('C')) (void)recovery.check();
-    if (parser.seen_test('E')) SERIAL_ECHOF(recovery.exists() ? F("PLR Exists\n") : F("No PLR\n"));
     if (parser.seen_test('V')) SERIAL_ECHOF(recovery.valid() ? F("Valid\n") : F("Invalid\n"));
+    TERN_(SDSUPPORT,if (parser.seen_test('E')) SERIAL_ECHOF(recovery.exists() ? F("PLR Exists\n") : F("No PLR\n"));)
   #endif
 }
 

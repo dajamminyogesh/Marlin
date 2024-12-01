@@ -23,9 +23,13 @@
 #include "utility.h"
 
 #include "../MarlinCore.h"
+#include "../module/planner.h"
 #include "../module/temperature.h"
 
 void safe_delay(millis_t ms) {
+  if (planner.cleaning_buffer_counter) {
+    planner.cleaning_buffer_counter += (ms * TEMP_TIMER_FREQUENCY / 1000);
+  };
   while (ms > 50) {
     ms -= 50;
     delay(50);

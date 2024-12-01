@@ -375,13 +375,14 @@ void GcodeSuite::G28() {
     #define _UNSAFE(A) (homeZ && TERN0(Z_SAFE_HOMING, axes_should_home(_BV(A##_AXIS))))
 
     const bool homeZ = TERN0(HAS_Z_AXIS, parser.seen_test('Z')),
+               unsafeX = TERN0(DUAL_X_CARRIAGE, IDEX_saved_duplication_state) && TERN0(Z_SAFE_HOMING, homeZ), // 复制和镜像模式下Z单独回零X轴不安全
                NUM_AXIS_LIST(              // Other axes should be homed before Z safe-homing
                  needX = _UNSAFE(X), needY = _UNSAFE(Y), needZ = false, // UNUSED
                  needI = _UNSAFE(I), needJ = _UNSAFE(J), needK = _UNSAFE(K),
                  needU = _UNSAFE(U), needV = _UNSAFE(V), needW = _UNSAFE(W)
                ),
                NUM_AXIS_LIST(              // Home each axis if needed or flagged
-                 homeX = needX || parser.seen_test('X'),
+                 homeX = needX || parser.seen_test('X') || unsafeX,
                  homeY = needY || parser.seen_test('Y'),
                  homeZZ = homeZ,
                  homeI = needI || parser.seen_test(AXIS4_NAME), homeJ = needJ || parser.seen_test(AXIS5_NAME),

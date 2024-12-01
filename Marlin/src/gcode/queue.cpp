@@ -31,6 +31,7 @@ GCodeQueue queue;
 
 #include "../lcd/marlinui.h"
 #include "../sd/cardreader.h"
+#include "../canOpen/canFile/canFile.h"
 #include "../module/motion.h"
 #include "../module/planner.h"
 #include "../module/temperature.h"
@@ -100,7 +101,11 @@ void GCodeQueue::RingBuffer::commit_command(const bool skip_ok
 ) {
   commands[index_w].skip_ok = skip_ok;
   TERN_(HAS_MULTI_SERIAL, commands[index_w].port = serial_ind);
-  TERN_(POWER_LOSS_RECOVERY, recovery.commit_sdpos(index_w));
+  #if ENABLED(SDSUPPORT)
+    TERN_(POWER_LOSS_RECOVERY, recovery.commit_sdpos(index_w));
+  #elif ENABLED(CANFILE)
+    TERN_(POWER_LOSS_RECOVERY, recovery.commit_canfilepos(index_w));
+  #endif
   advance_pos(index_w, 1);
 }
 
@@ -568,6 +573,7 @@ void GCodeQueue::get_serial_commands() {
    */
   inline void GCodeQueue::get_sdcard_commands() {
     static uint8_t sd_input_state = PS_NORMAL;
+    static uint8_t sd_err_count = PS_NORMAL;
 
     // Get commands if there are more in the file
     if (!IS_SD_FETCHING()) return;
@@ -576,8 +582,10 @@ void GCodeQueue::get_serial_commands() {
     while (!ring_buffer.full() && !card.eof()) {
       const int16_t n = card.get();
       const bool card_eof = card.eof();
-      if (n < 0 && !card_eof) { SERIAL_ERROR_MSG(STR_SD_ERR_READ); continue; }
-
+      if (n < 0 && !card_eof) { 
+        sd_err_count++;
+        if(sd_err_count > 10) { sd_err_count = 0; return; }
+        SERIAL_ERROR_MSG(STR_SD_ERR_READ); continue; }
       CommandLine &command = ring_buffer.commands[ring_buffer.index_w];
       const char sd_char = (char)n;
       const bool is_eol = ISEOL(sd_char);
@@ -613,6 +621,40 @@ void GCodeQueue::get_serial_commands() {
 
 #endif // HAS_MEDIA
 
+#if ENABLED(CANFILE)
+  void GCodeQueue::get_can_commands() {
+    static uint8_t canFileInputState = PS_NORMAL;
+    static int     charCount         = 0;
+
+    if (!IS_CANFILE_FETCHING()) return;
+
+    while (!ring_buffer.full() && !canFile.eof()) {
+      uint8_t    ch;
+      const bool success = canFile.get(ch);
+      const bool fileEof = canFile.eof();
+
+      // 不是文件结尾,但获取字符失败, 此时表明新数据尚未传输完成
+      if (!success && !fileEof) return;
+
+      CommandLine &command   = ring_buffer.commands[ring_buffer.index_w];
+
+      const char canFileChar = (char)ch;
+      const bool isEol       = ISEOL(canFileChar);
+
+      if (isEol || fileEof) {
+        if (!isEol && charCount) ++charCount;
+        if (!process_line_done(canFileInputState, command.buffer, charCount)) {
+          ring_buffer.commit_command(true);
+          TERN_(POWER_LOSS_RECOVERY, recovery.cmd_canfilepos = canFile.pos());
+        }
+        if (fileEof) canFile.taskFinishing();
+      } else {
+        process_stream_char(canFileChar, canFileInputState, command.buffer, charCount);
+      }
+    }
+  }
+#endif// CANFILE
+
 /**
  * Add to the circular command queue the next command from:
  *  - The command-injection queues (injected_commands_P, injected_commands)
@@ -620,11 +662,14 @@ void GCodeQueue::get_serial_commands() {
  *  - The SD card file being actively printed
  */
 void GCodeQueue::get_available_commands() {
+
   if (ring_buffer.full()) return;
 
   get_serial_commands();
 
   TERN_(HAS_MEDIA, get_sdcard_commands());
+
+  TERN_(CANFILE, get_can_commands());
 }
 
 /**
@@ -702,7 +747,9 @@ void GCodeQueue::advance() {
   #endif // HAS_MEDIA
 
   // The queue may be reset by a command handler or by code invoked by idle() within a handler
-  ring_buffer.advance_pos(ring_buffer.index_r, -1);
+  if (ring_buffer.occupied()) ring_buffer.advance_pos(ring_buffer.index_r, -1);
+
+  TERN_(POWER_LOSS_RECOVERY, recovery.queue_index_r = ring_buffer.index_r);
 }
 
 #if ENABLED(BUFFER_MONITORING)

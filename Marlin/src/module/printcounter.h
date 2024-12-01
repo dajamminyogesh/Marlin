@@ -69,7 +69,7 @@ class PrintCounter: public Stopwatch {
      * @details This const value defines what will be the time between each
      * accumulator update. This is different from the EEPROM save interval.
      */
-    static constexpr millis_t updateInterval = SEC_TO_MS(10);
+    static constexpr millis_t updateInterval = SEC_TO_MS(1);
 
     #if PRINTCOUNTER_SAVE_INTERVAL > 0
       /**
@@ -162,6 +162,9 @@ class PrintCounter: public Stopwatch {
      * @details Return the raw data, in the same structure used internally
      */
     static printStatistics getStats() { return data; }
+
+    // 设置总打印时间
+    static void setStatsPrintTime(millis_t sec);
 
     /**
      * @brief Loop function

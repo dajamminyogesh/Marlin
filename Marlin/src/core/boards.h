@@ -444,6 +444,8 @@
 #define BOARD_FYSETC_SPIDER_KING407   5242  // FYSETC Spider King407 (STM32F407ZG)
 #define BOARD_MKS_SKIPR_V1            5243  // MKS SKIPR v1.0 all-in-one board (STM32F407VE)
 #define BOARD_TRONXY_V10              5244  // TRONXY V10 (STM32F446ZE)
+#define BOARD_CREATBOT_V1_0           5245  // CreatBot V1.0 (STM32F446VET6)
+#define BOARD_CREATBOT_V2_0           5246  // CreatBot V2.0 (STM32F446VET6)
 
 //
 // ARM Cortex-M7

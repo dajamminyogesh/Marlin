@@ -633,6 +633,10 @@ void Stepper::apply_directions() {
   #endif
 
   DIR_WAIT_AFTER();
+
+  #if ENDSTOP_THRESHOLD_AFTER_DIR
+    endstops.setDisableCount(ENDSTOP_THRESHOLD_AFTER_DIR);
+  #endif
 }
 
 #if ENABLED(S_CURVE_ACCELERATION)
@@ -1628,6 +1632,11 @@ void Stepper::pulse_phase_isr() {
     abort_current_block = false;
     if (current_block) {
       discard_current_block();
+      #if ENABLED(SDSUPPORT)
+        TERN_(POWER_LOSS_RECOVERY, recovery.sync_sdpos());
+      #elif ENABLED(CANFILE)
+        TERN_(POWER_LOSS_RECOVERY, recovery.sync_canfilepos());
+      #endif
       #if HAS_ZV_SHAPING
         ShapingQueue::purge();
         #if ENABLED(INPUT_SHAPING_X)
@@ -2146,6 +2155,7 @@ uint32_t Stepper::block_phase_isr() {
 
       // Are we in acceleration phase ?
       if (step_events_completed <= accelerate_until) { // Calculate new timer value
+        uint32_t step_rate;
 
         #if ENABLED(S_CURVE_ACCELERATION)
           // Get the next speed to use (Jerk limited!)
@@ -2153,20 +2163,20 @@ uint32_t Stepper::block_phase_isr() {
                                    ? _eval_bezier_curve(acceleration_time)
                                    : current_block->cruise_rate;
         #else
-          acc_step_rate = STEP_MULTIPLY(acceleration_time, current_block->acceleration_rate) + current_block->initial_rate;
-          NOMORE(acc_step_rate, current_block->nominal_rate);
+          acc_step_rate = step_rate = STEP_MULTIPLY(acceleration_time, current_block->acceleration_rate) + current_block->initial_rate;
+          NOMORE(step_rate, current_block->nominal_rate);
         #endif
 
         // acc_step_rate is in steps/second
 
         // step_rate to timer interval and steps per stepper isr
-        interval = calc_timer_interval(acc_step_rate << oversampling_factor, steps_per_isr);
+        interval = calc_timer_interval(step_rate << oversampling_factor, steps_per_isr);
         acceleration_time += interval;
 
         #if ENABLED(LIN_ADVANCE)
           if (current_block->la_advance_rate) {
             const uint32_t la_step_rate = la_advance_steps < current_block->max_adv_steps ? current_block->la_advance_rate : 0;
-            la_interval = calc_timer_interval(acc_step_rate + la_step_rate) << current_block->la_scaling;
+            la_interval = calc_timer_interval(step_rate + la_step_rate) << current_block->la_scaling;
           }
         #endif
 
@@ -2385,8 +2395,12 @@ uint32_t Stepper::block_phase_isr() {
       #endif
 
       #if ENABLED(POWER_LOSS_RECOVERY)
-        recovery.info.sdpos = current_block->sdpos;
-        recovery.info.current_position = current_block->start_position;
+        #if ENABLED(SDSUPPORT)
+          recovery.info.sdpos = current_block->filepos;
+          // recovery.info.current_position = current_block->start_position;
+        #elif ENABLED(CANFILE)
+          recovery.info.canfilepos = current_block->filepos;
+        #endif
       #endif
 
       #if ENABLED(DIRECT_STEPPING)
@@ -3298,7 +3312,9 @@ void Stepper::report_positions() {
   #define _INVERT_DIR(AXIS) ENABLED(INVERT_## AXIS ##_DIR)
   #define _APPLY_DIR(AXIS, INVERT) AXIS ##_APPLY_DIR(INVERT, true)
 
-  #if MINIMUM_STEPPER_PULSE
+  #if BABYSTEP_MINIMUM_STEPPER_PULSE
+    #define STEP_PULSE_CYCLES ((BABYSTEP_MINIMUM_STEPPER_PULSE) * CYCLES_PER_MICROSECOND)
+  #elif MINIMUM_STEPPER_PULSE
     #define STEP_PULSE_CYCLES ((MINIMUM_STEPPER_PULSE) * CYCLES_PER_MICROSECOND)
   #else
     #define STEP_PULSE_CYCLES 0

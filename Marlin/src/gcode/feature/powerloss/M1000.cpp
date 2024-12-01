@@ -74,7 +74,11 @@ void GcodeSuite::M1000() {
       #elif ENABLED(DWIN_CREALITY_LCD_JYERSUI) // Temporary fix until it can be better implemented
         CrealityDWIN.Popup_Handler(Resume);
       #elif ENABLED(EXTENSIBLE_UI)
-        ExtUI::onPowerLossResume();
+        #if ENABLED(CANFILE)
+          recovery.state = true;
+        #else
+          ExtUI::onPowerLossResume();
+        #endif
       #else
         SERIAL_ECHO_MSG("Resume requires LCD.");
       #endif

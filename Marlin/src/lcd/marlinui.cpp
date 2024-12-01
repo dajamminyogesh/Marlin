@@ -36,6 +36,10 @@
   #include "../feature/password/password.h"
 #endif
 
+#if ENABLED(CANFILE)
+  #include "../canOpen/canFile/canFile.h"
+#endif
+
 // All displays share the MarlinUI class
 #include "marlinui.h"
 MarlinUI ui;
@@ -1470,7 +1474,8 @@ void MarlinUI::init() {
       msg = GET_TEXT_F(MSG_PRINT_PAUSED);
     #if HAS_MEDIA
       else if (IS_SD_PRINTING())
-        return set_status(card.longest_filename(), true);
+        // return set_status(card.longest_filename(), true);
+        msg = GET_TEXT_F(MSG_PRINTING);
     #endif
     else if (print_job_timer.isRunning())
       msg = GET_TEXT_F(MSG_PRINTING);
@@ -1493,6 +1498,7 @@ void MarlinUI::init() {
       return;
 
     set_status(msg, -1);
+    TERN_(HAS_STATUS_MESSAGE_TIMEOUT, status_message_expire_ms = 0);
   }
 
   /**
@@ -1638,10 +1644,14 @@ void MarlinUI::init() {
       wait_for_heatup = wait_for_user = false;
       card.abortFilePrintSoon();
     #endif
+    #if ENABLED(CANFILE)
+      wait_for_heatup = wait_for_user = false;
+      canFile.taskAborting();
+    #endif
     #ifdef ACTION_ON_CANCEL
       hostui.cancel();
     #endif
-    print_job_timer.stop();
+    IF_DISABLED(SDSUPPORT, print_job_timer.stop());
     TERN_(HOST_PROMPT_SUPPORT, hostui.prompt_open(PROMPT_INFO, F("UI Aborted"), FPSTR(DISMISS_STR)));
     LCD_MESSAGE(MSG_PRINT_ABORTED);
     TERN_(HAS_MARLINUI_MENU, return_to_status());
@@ -1677,10 +1687,12 @@ void MarlinUI::init() {
     LCD_MESSAGE(MSG_PRINT_PAUSED);
 
     #if ENABLED(PARK_HEAD_ON_PAUSE)
-      pause_show_message(PAUSE_MESSAGE_PARKING, PAUSE_MODE_PAUSE_PRINT); // Show message immediately to let user know about pause in progress
-      queue.inject(F("M25 P\nM24"));
+      pause_show_message(PAUSE_MESSAGE_SYNCING, PAUSE_MODE_PAUSE_PRINT); // Show message immediately to let user know about pause in progress
+      queue.inject(F("M125 P"));
     #elif HAS_MEDIA
       queue.inject(F("M25"));
+    #elif ENABLED(CANFILE)
+      canFile.taskPause();
     #elif defined(ACTION_ON_PAUSE)
       hostui.pause();
     #endif
@@ -1690,6 +1702,7 @@ void MarlinUI::init() {
     reset_status();
     TERN_(PARK_HEAD_ON_PAUSE, wait_for_heatup = wait_for_user = false);
     TERN_(HAS_MEDIA, if (IS_SD_PAUSED()) queue.inject_P(M24_STR));
+    TERN_(CANFILE, if (IS_CANFILE_PAUSED()) canFile.taskStart());
     #ifdef ACTION_ON_RESUME
       hostui.resume();
     #endif
@@ -1736,6 +1749,9 @@ void MarlinUI::init() {
       TERN0(SET_PROGRESS_PERCENT, (progress_override & PROGRESS_MASK))
       #if HAS_MEDIA
         ?: TERN(HAS_PRINT_PROGRESS_PERMYRIAD, card.permyriadDone(), card.percentDone())
+      #endif
+      #if ENABLED(CANFILE)
+        ?: TERN(HAS_PRINT_PROGRESS_PERMYRIAD, canFile.permyriadDone(), canFile.percentDone())
       #endif
     );
   }
@@ -1847,11 +1863,13 @@ void MarlinUI::init() {
     const PauseMode mode/*=PAUSE_MODE_SAME*/,
     const uint8_t extruder/*=active_extruder*/
   ) {
-    pause_mode = mode;
+    if (mode != PAUSE_MODE_SAME) pause_mode = mode;
     ExtUI::pauseModeStatus = message;
     switch (message) {
+      case PAUSE_MESSAGE_SYNCING:  ExtUI::onUserConfirmRequired(GET_TEXT_F(MSG_PAUSE_PRINT_SYNCING)); break;
       case PAUSE_MESSAGE_PARKING:  ExtUI::onUserConfirmRequired(GET_TEXT_F(MSG_PAUSE_PRINT_PARKING)); break;
       case PAUSE_MESSAGE_CHANGING: ExtUI::onUserConfirmRequired(GET_TEXT_F(MSG_FILAMENT_CHANGE_INIT)); break;
+      case PAUSE_MESSAGE_DELAY:    ExtUI::onUserConfirmRequired(GET_TEXT_F(MSG_FILAMENT_CHANGE_DELAY)); break;
       case PAUSE_MESSAGE_UNLOAD:   ExtUI::onUserConfirmRequired(GET_TEXT_F(MSG_FILAMENT_CHANGE_UNLOAD)); break;
       case PAUSE_MESSAGE_WAITING:  ExtUI::onUserConfirmRequired(GET_TEXT_F(MSG_ADVANCED_PAUSE_WAITING)); break;
       case PAUSE_MESSAGE_INSERT:   ExtUI::onUserConfirmRequired(GET_TEXT_F(MSG_FILAMENT_CHANGE_INSERT)); break;
@@ -1863,7 +1881,7 @@ void MarlinUI::init() {
       case PAUSE_MESSAGE_HEAT:     ExtUI::onUserConfirmRequired(GET_TEXT_F(MSG_FILAMENT_CHANGE_HEAT)); break;
       case PAUSE_MESSAGE_HEATING:  ExtUI::onUserConfirmRequired(GET_TEXT_F(MSG_FILAMENT_CHANGE_HEATING)); break;
       case PAUSE_MESSAGE_OPTION:   ExtUI::onUserConfirmRequired(GET_TEXT_F(MSG_FILAMENT_CHANGE_OPTION_HEADER)); break;
-      case PAUSE_MESSAGE_STATUS:   break;
+      case PAUSE_MESSAGE_STATUS:   ExtUI::onUserConfirmRequired(F("")); break;
       default: break;
     }
   }
